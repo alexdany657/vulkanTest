@@ -1,0 +1,9 @@
+# vim tmp files
+.swp
+.swo
+
+# object files
+*.o
+
+# main executable
+physEngine
