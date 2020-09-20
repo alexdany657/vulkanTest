@@ -26,10 +26,16 @@ void *SHUT_UP_GCC_PTR;
 
 /* structures */
 
+struct QueueFamilyIndices {
+    uint32_t graphicsFamily;
+    uint8_t graphicsFamilyHV:1;
+};
+
 struct HelloTriangleApp {
     GLFWwindow *pWindow;
     VkInstance *pInstance;
     VkDebugUtilsMessengerEXT *pDebugMessenger;
+    VkPhysicalDevice *pPhysicalDevice;
 };
 
 /* functions */
@@ -173,6 +179,86 @@ int checkValidationLayerSupport() {
     return 0;
 }
 
+void *findQueueFamilies(void *_device) {
+    VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
+
+    struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
+    if (!(pIndices)) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(*pDevice, &queueFamilyCount, NULL);
+
+    VkQueueFamilyProperties *pQueueFamilies = malloc(sizeof(VkQueueFamilyProperties) * queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(*pDevice, &queueFamilyCount, pQueueFamilies);
+
+    for (uint32_t i = 0; i < queueFamilyCount; ++i) {
+        if ((pQueueFamilies + i)->queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            pIndices->graphicsFamily = i;
+            pIndices->graphicsFamilyHV = 1;
+            break;
+        }
+    }
+
+    return pIndices;
+}
+
+int8_t isDeviceSuitable(void *_device) {
+    VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
+
+    VkPhysicalDeviceProperties *pDeviceProperties = malloc(sizeof(VkPhysicalDeviceProperties));
+    vkGetPhysicalDeviceProperties(*pDevice, pDeviceProperties);
+    
+    VkPhysicalDeviceFeatures *pDeviceFeatures = malloc(sizeof(VkPhysicalDeviceFeatures));
+    vkGetPhysicalDeviceFeatures(*pDevice, pDeviceFeatures);
+
+    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pDevice);
+
+    return pIndices && pIndices->graphicsFamilyHV;
+}
+
+int pickPhysicalDevice(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->pPhysicalDevice = malloc(sizeof(VkPhysicalDevice));
+    if (!pApp->pPhysicalDevice) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    *pApp->pPhysicalDevice = VK_NULL_HANDLE;
+
+    uint32_t deviceCount = 0;
+    vkEnumeratePhysicalDevices(*(pApp->pInstance), &deviceCount, NULL);
+
+    if (!deviceCount) {
+        printf("Failed to find GPUs with Vulkan support\n");
+        return 1;
+    }
+    
+    VkPhysicalDevice *devices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
+    if (!devices) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    vkEnumeratePhysicalDevices(*(pApp->pInstance), &deviceCount, devices);
+
+    for (uint32_t i = 0; i < deviceCount; ++i) {
+        if (isDeviceSuitable(devices + i)) {
+            pApp->pPhysicalDevice = devices + i;
+            break;
+        }
+    }
+
+    if (pApp->pPhysicalDevice == VK_NULL_HANDLE) {
+        printf("Failed to find a suitable GPU\n");
+        return 1;
+    }
+
+    return 0;
+}
+
 int createInstance(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -276,6 +362,11 @@ int initVulkan(void *_app) {
 
     if (setupDebugMessenger(pApp)) {
         printf("Failed to setup debug messenger\n");
+        return 1;
+    }
+    
+    if (pickPhysicalDevice(pApp)) {
+        printf("Failed to pick physical device\n");
         return 1;
     }
 
