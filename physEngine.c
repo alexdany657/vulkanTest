@@ -29,6 +29,9 @@ void *SHUT_UP_GCC_PTR;
 struct QueueFamilyIndices {
     uint32_t graphicsFamily;
     uint8_t graphicsFamilyHV:1;
+
+    uint32_t presentFamily;
+    uint8_t presentFamilyHV:1;
 };
 
 struct HelloTriangleApp {
@@ -36,6 +39,10 @@ struct HelloTriangleApp {
     VkInstance *pInstance;
     VkDebugUtilsMessengerEXT *pDebugMessenger;
     VkPhysicalDevice *pPhysicalDevice;
+    VkDevice *pDevice;
+    VkQueue *pGraphicsQueue;
+    VkQueue *pPresentQueue;
+    VkSurfaceKHR *pSurface;
 };
 
 /* functions */
@@ -179,7 +186,9 @@ int checkValidationLayerSupport() {
     return 0;
 }
 
-void *findQueueFamilies(void *_device) {
+void *findQueueFamilies(void *_app, void *_device) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
     VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
 
     struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
@@ -198,6 +207,17 @@ void *findQueueFamilies(void *_device) {
         if ((pQueueFamilies + i)->queueFlags & VK_QUEUE_GRAPHICS_BIT) {
             pIndices->graphicsFamily = i;
             pIndices->graphicsFamilyHV = 1;
+        }
+
+
+        VkBool32 presentSupport = (VkBool32)0;
+        vkGetPhysicalDeviceSurfaceSupportKHR(*pDevice, i, *(pApp->pSurface), &presentSupport);
+        if (presentSupport) {
+            pIndices->presentFamily = i;
+            pIndices->presentFamilyHV = 1;
+        }
+
+        if (pIndices->graphicsFamilyHV && pIndices->presentFamilyHV) {
             break;
         }
     }
@@ -205,7 +225,7 @@ void *findQueueFamilies(void *_device) {
     return pIndices;
 }
 
-int8_t isDeviceSuitable(void *_device) {
+int8_t isDeviceSuitable(void *pApp, void *_device) {
     VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
 
     VkPhysicalDeviceProperties *pDeviceProperties = malloc(sizeof(VkPhysicalDeviceProperties));
@@ -214,9 +234,110 @@ int8_t isDeviceSuitable(void *_device) {
     VkPhysicalDeviceFeatures *pDeviceFeatures = malloc(sizeof(VkPhysicalDeviceFeatures));
     vkGetPhysicalDeviceFeatures(*pDevice, pDeviceFeatures);
 
-    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pDevice);
+    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pDevice);
 
-    return pIndices && pIndices->graphicsFamilyHV;
+    return pIndices && pIndices->graphicsFamilyHV && pIndices->presentFamilyHV;
+}
+
+int createSurface(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->pSurface = malloc(sizeof(VkSurfaceKHR));
+    if (!pApp->pSurface) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    if (glfwCreateWindowSurface(*(pApp->pInstance), (pApp->pWindow), NULL, pApp->pSurface) != VK_SUCCESS) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+int createLogicalDevice(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->pDevice = malloc(sizeof(VkDevice));
+    if (!pApp->pDevice) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    pApp->pGraphicsQueue = malloc(sizeof(VkQueue));
+    if (!pApp->pGraphicsQueue) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    pApp->pPresentQueue = malloc(sizeof(VkQueue));
+    if (!pApp->pPresentQueue) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    struct QueueFamilyIndices *pIndices = findQueueFamilies(pApp, pApp->pPhysicalDevice);
+    int queueCreateInfoCount = 1;
+    if (pIndices->graphicsFamily != pIndices->presentFamily) {
+        queueCreateInfoCount++;
+    }
+
+    VkDeviceQueueCreateInfo *pQueueCreateInfos = malloc(sizeof(VkDeviceQueueCreateInfo) * queueCreateInfoCount);
+    if (!pQueueCreateInfos) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pQueueCreateInfos, 0, sizeof(VkDeviceQueueCreateInfo) * queueCreateInfoCount);
+    pQueueCreateInfos->sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    pQueueCreateInfos->queueFamilyIndex = pIndices->graphicsFamily;
+    pQueueCreateInfos->queueCount = 1;
+    float queuePriority = 1.0f;
+    pQueueCreateInfos->pQueuePriorities = &queuePriority;
+
+    if (queueCreateInfoCount > 2) {
+        (pQueueCreateInfos+1)->sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        (pQueueCreateInfos+1)->queueFamilyIndex = pIndices->presentFamily;
+        (pQueueCreateInfos+1)->queueCount = 1;
+        (pQueueCreateInfos+1)->pQueuePriorities = &queuePriority;
+    }
+
+    VkPhysicalDeviceFeatures *pDeviceFeatures = malloc(sizeof(VkPhysicalDeviceFeatures));
+    if (!pDeviceFeatures) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pDeviceFeatures, 0, sizeof(VkPhysicalDeviceFeatures));
+
+    VkDeviceCreateInfo *pCreateInfo = malloc(sizeof(VkDeviceCreateInfo));
+    if (!pCreateInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pCreateInfo, 0, sizeof(VkDeviceCreateInfo));
+
+    pCreateInfo->sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    pCreateInfo->pQueueCreateInfos = pQueueCreateInfos;
+    pCreateInfo->queueCreateInfoCount = queueCreateInfoCount;
+    pCreateInfo->pEnabledFeatures = pDeviceFeatures;
+
+    pCreateInfo->enabledExtensionCount = 0;
+    if (enableValidationLayers) {
+        pCreateInfo->enabledLayerCount = validationLayerCount;
+        pCreateInfo->ppEnabledLayerNames = validationLayers;
+    } else {
+        pCreateInfo->enabledLayerCount = 0;
+    }
+
+    if (vkCreateDevice(*(pApp->pPhysicalDevice), pCreateInfo, NULL, pApp->pDevice) != VK_SUCCESS) {
+        printf("Failed to create logical device\n");
+        return 1;
+    }
+
+    vkGetDeviceQueue(*(pApp->pDevice), pIndices->graphicsFamily, 0, pApp->pGraphicsQueue);
+    vkGetDeviceQueue(*(pApp->pDevice), pIndices->presentFamily, 0, pApp->pPresentQueue);
+
+    return 0;
 }
 
 int pickPhysicalDevice(void *_app) {
@@ -245,7 +366,7 @@ int pickPhysicalDevice(void *_app) {
     vkEnumeratePhysicalDevices(*(pApp->pInstance), &deviceCount, devices);
 
     for (uint32_t i = 0; i < deviceCount; ++i) {
-        if (isDeviceSuitable(devices + i)) {
+        if (isDeviceSuitable(pApp, devices + i)) {
             pApp->pPhysicalDevice = devices + i;
             break;
         }
@@ -364,9 +485,19 @@ int initVulkan(void *_app) {
         printf("Failed to setup debug messenger\n");
         return 1;
     }
+
+    if (createSurface(pApp)) {
+        printf("Failed to create surface\n");
+        return 1;
+    }
     
     if (pickPhysicalDevice(pApp)) {
         printf("Failed to pick physical device\n");
+        return 1;
+    }
+
+    if (createLogicalDevice(pApp)) {
+        printf("Failed to create logical device\n");
         return 1;
     }
 
@@ -386,10 +517,13 @@ int mainLoop(void *_app) {
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
+    vkDestroyDevice(*(pApp->pDevice), NULL);
+
     if (enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(pApp->pInstance, pApp->pDebugMessenger, NULL);
     }
 
+    vkDestroySurfaceKHR(*(pApp->pInstance), *(pApp->pSurface), NULL);
     vkDestroyInstance(*(pApp->pInstance), NULL);
 
     glfwDestroyWindow(pApp->pWindow);
