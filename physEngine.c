@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 /* constants */
 
@@ -13,6 +14,9 @@ const int HEIGHT = 600;
 
 const uint32_t validationLayerCount = 1;
 const char **validationLayers; /* see init later in "initValidationLayers" */
+
+const uint32_t deviceExtensionsCount = 1;
+const char **deviceExtensions;
 
 #ifdef NDEBUG
 const int8_t enableValidationLayers = 0;
@@ -25,6 +29,14 @@ int SHUT_UP_GCC_INT;
 void *SHUT_UP_GCC_PTR;
 
 /* structures */
+
+struct SwapChainSupportDetails {
+    VkSurfaceCapabilitiesKHR *pCapabilities;
+    uint32_t formatCount;
+    VkSurfaceFormatKHR *formats;
+    uint32_t presentModeCount;
+    VkPresentModeKHR *presentModes;
+};
 
 struct QueueFamilyIndices {
     uint32_t graphicsFamily;
@@ -43,9 +55,25 @@ struct HelloTriangleApp {
     VkQueue *pGraphicsQueue;
     VkQueue *pPresentQueue;
     VkSurfaceKHR *pSurface;
+    VkSwapchainKHR *pSwapChain;
+    uint32_t swapChainImagesCount;
+    VkImage *swapChainImages;
+    VkFormat *pSwapChainFormat;
+    VkExtent2D *pSwapChainExtent;
 };
 
 /* functions */
+
+int initDeviceExtensions() {
+    deviceExtensions = malloc(sizeof(char *) * deviceExtensionsCount);
+    if (!deviceExtensions) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    *deviceExtensions = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+
+    return 0;
+}
 
 int initValidationLayers() {
     validationLayers = malloc(sizeof(char *) * validationLayerCount);
@@ -186,6 +214,84 @@ int checkValidationLayerSupport() {
     return 0;
 }
 
+VkExtent2D chooseSwapExtent(VkSurfaceCapabilitiesKHR *capabilities) {
+    if (capabilities->currentExtent.width != UINT32_MAX) {
+        return capabilities->currentExtent;
+    } else {
+        VkExtent2D actualExtent = {WIDTH, HEIGHT};
+        actualExtent.width =
+            fmax(capabilities->minImageExtent.width,
+            fmin(capabilities->maxImageExtent.width,
+            actualExtent.width));
+        actualExtent.height =
+            fmax(capabilities->minImageExtent.height,
+            fmin(capabilities->maxImageExtent.height,
+            actualExtent.height));
+        return actualExtent;
+    }
+}
+
+VkPresentModeKHR chooseSwapPresentMode(VkPresentModeKHR *availablePresentModes, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        if (*(availablePresentModes + i) == VK_PRESENT_MODE_MAILBOX_KHR) {
+            return *(availablePresentModes + i);
+        }
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+void *chooseSwapSurfaceFormat(VkSurfaceFormatKHR *availableFormats, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        if ((availableFormats + i)->format == VK_FORMAT_B8G8R8A8_UNORM && (availableFormats + i)->colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return availableFormats + i;
+        }
+    }
+    return availableFormats;
+}
+
+void *querySwapChainSupport(void *_app, void *_device) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
+
+    struct SwapChainSupportDetails *pDetails = malloc(sizeof(struct SwapChainSupportDetails));
+    if (!pDetails) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+    memset(pDetails, 0, sizeof(struct SwapChainSupportDetails));
+
+    pDetails->pCapabilities = malloc(sizeof(VkSurfaceCapabilitiesKHR));
+    if (!pDetails->pCapabilities) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(*pDevice, *(pApp->pSurface), pDetails->pCapabilities);
+
+    vkGetPhysicalDeviceSurfaceFormatsKHR(*pDevice, *(pApp->pSurface), &(pDetails->formatCount), NULL);
+    if (pDetails->formatCount != 0) {
+        pDetails->formats = malloc(sizeof(VkSurfaceFormatKHR) * pDetails->formatCount);
+        if (!pDetails->formats) {
+            printf("OOM: dropping\n");
+            return NULL;
+        }
+        vkGetPhysicalDeviceSurfaceFormatsKHR(*pDevice, *(pApp->pSurface), &(pDetails->formatCount), pDetails->formats);
+    }
+
+    vkGetPhysicalDeviceSurfacePresentModesKHR(*pDevice, *(pApp->pSurface), &(pDetails->presentModeCount), NULL);
+    if (pDetails->presentModeCount != 0) {
+        pDetails->presentModes = malloc(sizeof(VkPresentModeKHR) * pDetails->presentModeCount);
+        if (!pDetails->presentModes) {
+            printf("OOM: dropping\n");
+            return NULL;
+        }
+        vkGetPhysicalDeviceSurfacePresentModesKHR(*pDevice, *(pApp->pSurface), &(pDetails->presentModeCount), pDetails->presentModes);
+    }
+
+    return pDetails;
+}
+
 void *findQueueFamilies(void *_app, void *_device) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -225,6 +331,40 @@ void *findQueueFamilies(void *_app, void *_device) {
     return pIndices;
 }
 
+int8_t checkDeviceExtensionsSupport(void *_device) {
+    VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
+
+    uint32_t extensionCount;
+    vkEnumerateDeviceExtensionProperties(*pDevice, NULL, &extensionCount, NULL);
+
+    VkExtensionProperties *availableExtensions = malloc(sizeof(VkExtensionProperties) * extensionCount);
+    if (!availableExtensions) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    vkEnumerateDeviceExtensionProperties(*pDevice, NULL, &extensionCount, availableExtensions);
+
+    for (uint32_t i = 0; i < deviceExtensionsCount; ++i) {
+        uint8_t found = 0;
+
+        for (uint32_t j = 0; j < extensionCount; ++j) {
+#ifndef NDEBUG
+            printf("need:\t%s\navailable:\t%s\n", *(deviceExtensions + i), (availableExtensions + j)->extensionName);
+#endif
+            if (!strcmp(*(deviceExtensions + i), (availableExtensions + j)->extensionName)) {
+                found = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int8_t isDeviceSuitable(void *pApp, void *_device) {
     VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
 
@@ -235,8 +375,98 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     vkGetPhysicalDeviceFeatures(*pDevice, pDeviceFeatures);
 
     struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pDevice);
+    if (!pIndices) {
+        return 0;
+    }
+    struct SwapChainSupportDetails *pSwapChainSupport = querySwapChainSupport(pApp, pDevice);
+    if (!pSwapChainSupport) {
+        return 0;
+    }
 
-    return pIndices && pIndices->graphicsFamilyHV && pIndices->presentFamilyHV;
+    int8_t indicesComplete = pIndices && pIndices->graphicsFamilyHV && pIndices->presentFamilyHV;
+    int8_t extensionsSupported = !checkDeviceExtensionsSupport(pDevice);
+    int8_t swapChainAdequate = pSwapChainSupport->formatCount && pSwapChainSupport->presentModeCount;
+
+    return indicesComplete && extensionsSupported && swapChainAdequate;
+}
+
+int createSwapChain(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->pSwapChain = malloc(sizeof(VkSwapchainKHR));
+    if (!pApp->pSwapChain) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    struct SwapChainSupportDetails *pSwapChainSupport = (struct SwapChainSupportDetails *)querySwapChainSupport(pApp, pApp->pPhysicalDevice);
+
+    VkSurfaceFormatKHR surfaceFormat = *((VkSurfaceFormatKHR *)chooseSwapSurfaceFormat(pSwapChainSupport->formats, pSwapChainSupport->formatCount));
+
+    VkPresentModeKHR presentMode = chooseSwapPresentMode(pSwapChainSupport->presentModes, pSwapChainSupport->presentModeCount);
+
+    VkExtent2D extent = chooseSwapExtent(pSwapChainSupport->pCapabilities);
+
+    uint32_t imageCount = pSwapChainSupport->pCapabilities->minImageCount + 1;
+
+    if (pSwapChainSupport->pCapabilities->maxImageCount > 0 && imageCount > pSwapChainSupport->pCapabilities->maxImageCount) {
+       imageCount = pSwapChainSupport->pCapabilities->maxImageCount; 
+    }
+
+    VkSwapchainCreateInfoKHR *pCreateInfo = malloc(sizeof(VkSwapchainCreateInfoKHR));
+    if (!pCreateInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pCreateInfo, 0, sizeof(VkSwapchainCreateInfoKHR));
+    pCreateInfo->sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    pCreateInfo->surface = *(pApp->pSurface);
+    pCreateInfo->minImageCount = imageCount;
+    pCreateInfo->imageFormat = surfaceFormat.format;
+    pCreateInfo->imageColorSpace = surfaceFormat.colorSpace;
+    pCreateInfo->imageExtent = extent;
+    pCreateInfo->imageArrayLayers = 1;
+    pCreateInfo->imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pApp->pPhysicalDevice);
+    if (!pIndices) {
+        printf("Failed to find queue families\n");
+        return 1;
+    }
+    uint32_t queueFamilyIndices[] = {pIndices->graphicsFamily, pIndices->presentFamily};
+
+    if (pIndices->graphicsFamily != pIndices->presentFamily) {
+        pCreateInfo->imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        pCreateInfo->queueFamilyIndexCount = 2;
+        pCreateInfo->pQueueFamilyIndices = queueFamilyIndices;
+    } else {
+        pCreateInfo->imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    pCreateInfo->preTransform = pSwapChainSupport->pCapabilities->currentTransform;
+    pCreateInfo->compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    pCreateInfo->presentMode = presentMode;
+    pCreateInfo->clipped = VK_TRUE;
+
+    pCreateInfo->oldSwapchain = VK_NULL_HANDLE;
+
+    if (vkCreateSwapchainKHR(*(pApp->pDevice), pCreateInfo, NULL, pApp->pSwapChain) != VK_SUCCESS) {
+        printf("Failed to create swap chain\n");
+        return 1;
+    }
+
+    vkGetSwapchainImagesKHR(*(pApp->pDevice), *(pApp->pSwapChain), &(pApp->swapChainImagesCount), NULL);
+    pApp->swapChainImages = malloc(sizeof(VkImage) * pApp->swapChainImagesCount);
+    if (!pApp->swapChainImages) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    vkGetSwapchainImagesKHR(*(pApp->pDevice), *(pApp->pSwapChain), &(pApp->swapChainImagesCount), pApp->swapChainImages);
+
+    pApp->pSwapChainFormat = &(surfaceFormat.format);
+    pApp->pSwapChainExtent = &(extent);
+
+    return 0;
 }
 
 int createSurface(void *_app) {
@@ -321,13 +551,14 @@ int createLogicalDevice(void *_app) {
     pCreateInfo->queueCreateInfoCount = queueCreateInfoCount;
     pCreateInfo->pEnabledFeatures = pDeviceFeatures;
 
-    pCreateInfo->enabledExtensionCount = 0;
     if (enableValidationLayers) {
         pCreateInfo->enabledLayerCount = validationLayerCount;
         pCreateInfo->ppEnabledLayerNames = validationLayers;
     } else {
         pCreateInfo->enabledLayerCount = 0;
     }
+    pCreateInfo->enabledExtensionCount = deviceExtensionsCount;
+    pCreateInfo->ppEnabledExtensionNames = deviceExtensions;
 
     if (vkCreateDevice(*(pApp->pPhysicalDevice), pCreateInfo, NULL, pApp->pDevice) != VK_SUCCESS) {
         printf("Failed to create logical device\n");
@@ -372,7 +603,7 @@ int pickPhysicalDevice(void *_app) {
         }
     }
 
-    if (pApp->pPhysicalDevice == VK_NULL_HANDLE) {
+    if (*pApp->pPhysicalDevice == VK_NULL_HANDLE) {
         printf("Failed to find a suitable GPU\n");
         return 1;
     }
@@ -501,6 +732,11 @@ int initVulkan(void *_app) {
         return 1;
     }
 
+    if (createSwapChain(pApp)) {
+        printf("Failed to create swap chain\n");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -516,6 +752,8 @@ int mainLoop(void *_app) {
 
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    vkDestroySwapchainKHR(*(pApp->pDevice), *(pApp->pSwapChain), NULL);
 
     vkDestroyDevice(*(pApp->pDevice), NULL);
 
@@ -561,6 +799,11 @@ int run(void *_app) {
 int init() {
     if (initValidationLayers()) {
         printf("Failed to init required validation layers\n");
+        return 1;
+    }
+
+    if (initDeviceExtensions()) {
+        printf("Failed to init required extensions\n");
         return 1;
     }
 
