@@ -8,3 +8,8 @@
 # main executable
 physEngine
 physEngine.d
+
+# spv and tmp shader files
+shader.vert
+shader.frag
+*.spv

@@ -59,7 +59,11 @@ struct HelloTriangleApp {
     uint32_t swapChainImagesCount;
     VkImage *swapChainImages;
     VkFormat *pSwapChainFormat;
-    VkExtent2D *pSwapChainExtent;
+    VkExtent2D swapChainExtent;
+    VkImageView *swapChainImageViews;
+    VkRenderPass *pRenderPass;
+    VkPipelineLayout *pPipelineLayout;
+    VkPipeline *pGraphicsPipeline;
 };
 
 /* functions */
@@ -84,6 +88,32 @@ int initValidationLayers() {
     *validationLayers = "VK_LAYER_KHRONOS_validation";
 
     return 0;
+}
+
+char *readFile(const char *fname, uint32_t *sizeBuff) {
+    FILE *fd = fopen(fname, "r");
+    if (!fd) {
+        printf("Failed to read file\n");
+        return NULL;
+    }
+
+    uint32_t size = 0;
+    while (fgetc(fd) != EOF) size++;
+
+    fclose(fd);
+
+    *sizeBuff = size;
+    char *data = malloc(sizeof(char) * size);
+    if (!data) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+
+    fd = fopen(fname, "r");
+    fread(data, 1, size, fd);
+    fclose(fd);
+
+    return data;
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -390,6 +420,341 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     return indicesComplete && extensionsSupported && swapChainAdequate;
 }
 
+VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+    VkShaderModuleCreateInfo *pCreateInfo = malloc(sizeof(VkShaderModuleCreateInfo));
+    if (!pCreateInfo) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+    memset(pCreateInfo, 0, sizeof(VkShaderModuleCreateInfo));
+    pCreateInfo->sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    pCreateInfo->codeSize = size;
+    pCreateInfo->pCode = (const uint32_t *)code;
+
+    VkShaderModule *pShaderModule = malloc(sizeof(VkShaderModule));
+    if (!pShaderModule) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+    if (vkCreateShaderModule(*(pApp->pDevice), pCreateInfo, NULL, pShaderModule) != VK_SUCCESS) {
+        printf("Failed to create shader module\n");
+        return NULL;
+    }
+
+    return pShaderModule;
+}
+
+int createGraphicsPipeline(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    uint32_t vertShaderCodeSize, fragShaderCodeSize;
+    char *vertShaderCode = readFile("vert.spv", &vertShaderCodeSize);
+    char *fragShaderCode = readFile("frag.spv", &fragShaderCodeSize);
+
+    VkShaderModule *vertShaderModule = createShaderModule(pApp, vertShaderCode, vertShaderCodeSize);
+    if (!vertShaderModule) {
+        printf("Failed to create vertex shader module\n");
+        return 1;
+    }
+    VkShaderModule *fragShaderModule = createShaderModule(pApp, fragShaderCode, fragShaderCodeSize);
+    if (!fragShaderModule) {
+        printf("Failed to create fragment shader module\n");
+        return 1;
+    }
+
+    VkPipelineShaderStageCreateInfo *pShaderStages = malloc(sizeof(VkPipelineShaderStageCreateInfo) * 2);
+    if (!pShaderStages) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pShaderStages, 0, sizeof(VkPipelineShaderStageCreateInfo) * 2);
+    pShaderStages->sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pShaderStages->stage = VK_SHADER_STAGE_VERTEX_BIT;
+    pShaderStages->module = *vertShaderModule;
+    pShaderStages->pName = "main";
+
+    (pShaderStages + 1)->sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    (pShaderStages + 1)->stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    (pShaderStages + 1)->module = *fragShaderModule;
+    (pShaderStages + 1)->pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo *pVertexInputInfo = malloc(sizeof(VkPipelineVertexInputStateCreateInfo));
+    if (!pVertexInputInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pVertexInputInfo, 0, sizeof(VkPipelineVertexInputStateCreateInfo));
+    pVertexInputInfo->sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    
+    VkPipelineInputAssemblyStateCreateInfo *pInputAssembly = malloc(sizeof(VkPipelineInputAssemblyStateCreateInfo));
+    if (!pInputAssembly) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pInputAssembly, 0, sizeof(VkPipelineInputAssemblyStateCreateInfo));
+    pInputAssembly->sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    pInputAssembly->topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    pInputAssembly->primitiveRestartEnable = VK_FALSE;
+
+    VkViewport *pViewport = malloc(sizeof(VkViewport));
+    if (!pViewport) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pViewport, 0, sizeof(VkViewport));
+    pViewport->x = 0.0f;
+    pViewport->y = 0.0f;
+    pViewport->width = (float)pApp->swapChainExtent.width;
+    pViewport->height = (float)pApp->swapChainExtent.height;
+    pViewport->minDepth = 0.0f;
+    pViewport->maxDepth = 1.0f;
+
+    VkRect2D *pScissor = malloc(sizeof(VkRect2D));
+    if (!pScissor) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pScissor, 0, sizeof(VkRect2D));
+    pScissor->offset.x = 0;
+    pScissor->offset.y = 0;
+    pScissor->extent = pApp->swapChainExtent;
+
+    VkPipelineViewportStateCreateInfo *pViewportState = malloc(sizeof(VkPipelineViewportStateCreateInfo));
+    if (!pViewportState) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pViewportState, 0, sizeof(VkPipelineViewportStateCreateInfo));
+    pViewportState->sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    pViewportState->viewportCount = 1;
+    pViewportState->pViewports = pViewport;
+    pViewportState->scissorCount = 1;
+    pViewportState->pScissors = pScissor;
+
+    VkPipelineRasterizationStateCreateInfo *pRasterizer = malloc(sizeof(VkPipelineRasterizationStateCreateInfo));
+    if (!pRasterizer) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pRasterizer, 0, sizeof(VkPipelineRasterizationStateCreateInfo));
+    pRasterizer->sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    pRasterizer->depthClampEnable = VK_FALSE;
+    pRasterizer->rasterizerDiscardEnable = VK_FALSE;
+    pRasterizer->polygonMode = VK_POLYGON_MODE_FILL;
+    pRasterizer->lineWidth = 1.0f;
+    pRasterizer->cullMode = VK_CULL_MODE_BACK_BIT;
+    pRasterizer->frontFace = VK_FRONT_FACE_CLOCKWISE;
+    pRasterizer->depthBiasEnable = VK_FALSE;
+
+    VkPipelineMultisampleStateCreateInfo *pMultisampling = malloc(sizeof(VkPipelineMultisampleStateCreateInfo));
+    if (!pMultisampling) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pMultisampling, 0, sizeof(VkPipelineMultisampleStateCreateInfo));
+    pMultisampling->sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    pMultisampling->sampleShadingEnable = VK_FALSE;
+    pMultisampling->rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    pMultisampling->minSampleShading = 1.0f;
+
+    VkPipelineColorBlendAttachmentState *pColorBlendAttachment = malloc(sizeof(VkPipelineColorBlendAttachmentState));
+    if (!pColorBlendAttachment) {
+        printf("OOM: dorpping\n");
+        return 1;
+    }
+    memset(pColorBlendAttachment, 0, sizeof(VkPipelineColorBlendAttachmentState));
+    pColorBlendAttachment->colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    pColorBlendAttachment->blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo *pColorBlending = malloc(sizeof(VkPipelineColorBlendStateCreateInfo));
+    if (!pColorBlending) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pColorBlending, 0, sizeof(VkPipelineColorBlendStateCreateInfo));
+    pColorBlending->sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    pColorBlending->logicOpEnable = VK_FALSE;
+    pColorBlending->attachmentCount = 1;
+    pColorBlending->pAttachments = pColorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_LINE_WIDTH
+    };
+
+    VkPipelineDynamicStateCreateInfo *pDynamicState = malloc(sizeof(VkPipelineDynamicStateCreateInfo));
+    if (!pDynamicState) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pDynamicState, 0, sizeof(VkPipelineDynamicStateCreateInfo));
+    pDynamicState->sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    pDynamicState->dynamicStateCount = 2;
+    pDynamicState->pDynamicStates = dynamicStates;
+
+    pApp->pPipelineLayout = malloc(sizeof(VkPipelineLayout));
+    if (!(pApp->pPipelineLayout)) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    VkPipelineLayoutCreateInfo *pPipelineLayoutInfo = malloc(sizeof(VkPipelineLayoutCreateInfo));
+    if (!pPipelineLayoutInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pPipelineLayoutInfo, 0, sizeof(VkPipelineLayoutCreateInfo));
+    pPipelineLayoutInfo->sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+    if (vkCreatePipelineLayout(*(pApp->pDevice), pPipelineLayoutInfo, NULL, pApp->pPipelineLayout) != VK_SUCCESS) {
+        printf("Failed to create pipeline layout\n");
+        return 1;
+    }
+
+    VkGraphicsPipelineCreateInfo *pPipelineInfo = malloc(sizeof(VkGraphicsPipelineCreateInfo));
+    if (!pPipelineInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pPipelineInfo, 0, sizeof(VkGraphicsPipelineCreateInfo));
+    pPipelineInfo->sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pPipelineInfo->stageCount = 2;
+    pPipelineInfo->pStages = pShaderStages;
+
+    pPipelineInfo->pVertexInputState = pVertexInputInfo;
+    pPipelineInfo->pInputAssemblyState = pInputAssembly;
+    pPipelineInfo->pViewportState = pViewportState;
+    pPipelineInfo->pRasterizationState = pRasterizer;
+    pPipelineInfo->pMultisampleState = pMultisampling;
+    pPipelineInfo->pColorBlendState = pColorBlending;
+
+    pPipelineInfo->layout = *(pApp->pPipelineLayout);
+    pPipelineInfo->renderPass = *(pApp->pRenderPass);
+    pPipelineInfo->subpass = 0;
+
+    pApp->pGraphicsPipeline = malloc(sizeof(VkPipeline));
+    if (!(pApp->pGraphicsPipeline)) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    if (vkCreateGraphicsPipelines(*(pApp->pDevice), VK_NULL_HANDLE, 1, pPipelineInfo, NULL, pApp->pGraphicsPipeline) != VK_SUCCESS) {
+        printf("Failed to create graphics pipeline\n");
+        return 1;
+    }
+
+    vkDestroyShaderModule(*(pApp->pDevice), *vertShaderModule, NULL);
+    vkDestroyShaderModule(*(pApp->pDevice), *fragShaderModule, NULL);
+
+    return 0;
+}
+
+int createRenderPass(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkAttachmentDescription *pColorAttachment = malloc(sizeof(VkAttachmentDescription));
+    if (!pColorAttachment) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pColorAttachment, 0, sizeof(VkAttachmentDescription));
+    pColorAttachment->format = *(pApp->pSwapChainFormat);
+    pColorAttachment->samples = VK_SAMPLE_COUNT_1_BIT;
+    pColorAttachment->loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    pColorAttachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    pColorAttachment->stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    pColorAttachment->stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    pColorAttachment->initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    pColorAttachment->finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference *pColorAttachmentRef = malloc(sizeof(VkAttachmentReference));
+    if (!pColorAttachmentRef) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pColorAttachmentRef, 0, sizeof(VkAttachmentReference));
+    pColorAttachmentRef->attachment = 0;
+    pColorAttachmentRef->layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription *pSubpass = malloc(sizeof(VkSubpassDescription));
+    if (!pSubpass) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pSubpass, 0, sizeof(VkSubpassDescription));
+    pSubpass->pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    pSubpass->colorAttachmentCount = 1;
+    pSubpass->pColorAttachments = pColorAttachmentRef;
+
+    pApp->pRenderPass = malloc(sizeof(VkRenderPass));
+    if (!(pApp->pRenderPass)) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    VkRenderPassCreateInfo *pRenderPassInfo = malloc(sizeof(VkRenderPassCreateInfo));
+    if (!pRenderPassInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pRenderPassInfo, 0, sizeof(VkRenderPassCreateInfo));
+    pRenderPassInfo->sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    pRenderPassInfo->attachmentCount = 1;
+    pRenderPassInfo->pAttachments = pColorAttachment;
+    pRenderPassInfo->subpassCount = 1;
+    pRenderPassInfo->pSubpasses = pSubpass;
+
+    if (vkCreateRenderPass(*(pApp->pDevice), pRenderPassInfo, NULL, pApp->pRenderPass) != VK_SUCCESS) {
+        printf("Failed to create render pass\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+int createImageViews(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->swapChainImageViews = malloc(sizeof(VkImageView) * pApp->swapChainImagesCount);
+    if (!pApp->swapChainImageViews) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        VkImageViewCreateInfo *pCreateInfo = malloc(sizeof(VkImageViewCreateInfo));
+        if (!pCreateInfo) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        memset(pCreateInfo, 0, sizeof(VkImageViewCreateInfo));
+
+        pCreateInfo->sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        pCreateInfo->image = *(pApp->swapChainImages + i);
+        pCreateInfo->viewType = VK_IMAGE_VIEW_TYPE_2D;
+        pCreateInfo->format = *(pApp->pSwapChainFormat);
+#ifndef NDEBUG
+        printf("%p, %i\n", pApp->pSwapChainFormat, *(pApp->pSwapChainFormat));
+#endif
+        pCreateInfo->components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        pCreateInfo->components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        pCreateInfo->components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        pCreateInfo->components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+        pCreateInfo->subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        pCreateInfo->subresourceRange.baseMipLevel = 0;
+        pCreateInfo->subresourceRange.levelCount = 1;
+        pCreateInfo->subresourceRange.baseArrayLayer = 0;
+        pCreateInfo->subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(*(pApp->pDevice), pCreateInfo, NULL, pApp->swapChainImageViews + i) != VK_SUCCESS) {
+            printf("Failed to create image views\n");
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int createSwapChain(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -401,7 +766,10 @@ int createSwapChain(void *_app) {
 
     struct SwapChainSupportDetails *pSwapChainSupport = (struct SwapChainSupportDetails *)querySwapChainSupport(pApp, pApp->pPhysicalDevice);
 
-    VkSurfaceFormatKHR surfaceFormat = *((VkSurfaceFormatKHR *)chooseSwapSurfaceFormat(pSwapChainSupport->formats, pSwapChainSupport->formatCount));
+    VkSurfaceFormatKHR *pSurfaceFormat = (VkSurfaceFormatKHR *)chooseSwapSurfaceFormat(pSwapChainSupport->formats, pSwapChainSupport->formatCount);
+#ifndef NDEBUG
+    printf("%p, %i\n", pSurfaceFormat, pSurfaceFormat->format);
+#endif
 
     VkPresentModeKHR presentMode = chooseSwapPresentMode(pSwapChainSupport->presentModes, pSwapChainSupport->presentModeCount);
 
@@ -422,8 +790,8 @@ int createSwapChain(void *_app) {
     pCreateInfo->sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     pCreateInfo->surface = *(pApp->pSurface);
     pCreateInfo->minImageCount = imageCount;
-    pCreateInfo->imageFormat = surfaceFormat.format;
-    pCreateInfo->imageColorSpace = surfaceFormat.colorSpace;
+    pCreateInfo->imageFormat = pSurfaceFormat->format;
+    pCreateInfo->imageColorSpace = pSurfaceFormat->colorSpace;
     pCreateInfo->imageExtent = extent;
     pCreateInfo->imageArrayLayers = 1;
     pCreateInfo->imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -463,8 +831,8 @@ int createSwapChain(void *_app) {
     }
     vkGetSwapchainImagesKHR(*(pApp->pDevice), *(pApp->pSwapChain), &(pApp->swapChainImagesCount), pApp->swapChainImages);
 
-    pApp->pSwapChainFormat = &(surfaceFormat.format);
-    pApp->pSwapChainExtent = &(extent);
+    pApp->pSwapChainFormat = &(pSurfaceFormat->format);
+    pApp->swapChainExtent = extent;
 
     return 0;
 }
@@ -737,6 +1105,21 @@ int initVulkan(void *_app) {
         return 1;
     }
 
+    if (createImageViews(pApp)) {
+        printf("Fialed to create image views\n");
+        return 1;
+    }
+
+    if (createRenderPass(pApp)) {
+        printf("Failed to create render pass\n");
+        return 1;
+    }
+
+    if (createGraphicsPipeline(pApp)) {
+        printf("Failed to create graphics pipeline\n");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -752,6 +1135,16 @@ int mainLoop(void *_app) {
 
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    vkDestroyPipeline(*(pApp->pDevice), *(pApp->pGraphicsPipeline), NULL);
+
+    vkDestroyPipelineLayout(*(pApp->pDevice), *(pApp->pPipelineLayout), NULL);
+
+    vkDestroyRenderPass(*(pApp->pDevice), *(pApp->pRenderPass), NULL);
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        vkDestroyImageView(*(pApp->pDevice), *(pApp->swapChainImageViews + i), NULL);
+    }
 
     vkDestroySwapchainKHR(*(pApp->pDevice), *(pApp->pSwapChain), NULL);
 
