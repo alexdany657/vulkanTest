@@ -64,6 +64,7 @@ struct HelloTriangleApp {
     VkRenderPass *pRenderPass;
     VkPipelineLayout *pPipelineLayout;
     VkPipeline *pGraphicsPipeline;
+    VkFramebuffer *pSwapChainFramebuffers;
 };
 
 /* functions */
@@ -443,6 +444,33 @@ VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) 
     }
 
     return pShaderModule;
+}
+
+int createFramebuffers(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->pSwapChainFramebuffers = malloc(sizeof(VkFramebuffer) * (pApp->swapChainImagesCount));
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        VkFramebufferCreateInfo *pFramebufferInfo = malloc(sizeof(VkFramebufferCreateInfo));
+        if (!pFramebufferInfo) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        memset(pFramebufferInfo, 0, sizeof(VkFramebufferCreateInfo));
+        pFramebufferInfo->sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        pFramebufferInfo->renderPass = *(pApp->pRenderPass);
+        pFramebufferInfo->attachmentCount = 1;
+        pFramebufferInfo->pAttachments = pApp->swapChainImageViews + i;
+        pFramebufferInfo->width = pApp->swapChainExtent.width;
+        pFramebufferInfo->height = pApp->swapChainExtent.height;
+        pFramebufferInfo->layers = 1;
+
+        if (vkCreateFramebuffer(*(pApp->pDevice), pFramebufferInfo, NULL, pApp->pSwapChainFramebuffers + i) != VK_SUCCESS) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int createGraphicsPipeline(void *_app) {
@@ -1120,6 +1148,11 @@ int initVulkan(void *_app) {
         return 1;
     }
 
+    if (createFramebuffers(pApp)) {
+        printf("Failed to create framebuffers\n");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -1135,6 +1168,10 @@ int mainLoop(void *_app) {
 
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        vkDestroyFramebuffer(*(pApp->pDevice), *(pApp->pSwapChainFramebuffers + i), NULL);
+    }
 
     vkDestroyPipeline(*(pApp->pDevice), *(pApp->pGraphicsPipeline), NULL);
 
