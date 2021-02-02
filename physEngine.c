@@ -24,7 +24,7 @@ const int8_t enableValidationLayers = 0;
 const int8_t enableValidationLayers = 1;
 #endif
 
-/* to remove gcc's warnings abnout unused something */
+/* to remove gcc's warnings about unused something */
 int SHUT_UP_GCC_INT;
 void *SHUT_UP_GCC_PTR;
 
@@ -65,6 +65,10 @@ struct HelloTriangleApp {
     VkPipelineLayout *pPipelineLayout;
     VkPipeline *pGraphicsPipeline;
     VkFramebuffer *pSwapChainFramebuffers;
+    VkCommandPool *pCommandPool;
+    VkCommandBuffer *commandBuffers;
+    VkSemaphore *pImageAvailableSemaphore;
+    VkSemaphore *pRenderFinishedSemaphore;
 };
 
 /* functions */
@@ -446,6 +450,195 @@ VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) 
     return pShaderModule;
 }
 
+int drawFrame(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    uint32_t imageIndex;
+    vkAcquireNextImageKHR(*(pApp->pDevice), *(pApp->pSwapChain), UINT64_MAX, *(pApp->pImageAvailableSemaphore), VK_NULL_HANDLE, &imageIndex);
+
+    VkSubmitInfo *pSubmitInfo = malloc(sizeof(VkSubmitInfo));
+    if (!pSubmitInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pSubmitInfo, 0, sizeof(VkSubmitInfo));
+    pSubmitInfo->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = {*(pApp->pImageAvailableSemaphore)};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+
+    pSubmitInfo->waitSemaphoreCount = 1;
+    pSubmitInfo->pWaitSemaphores = waitSemaphores;
+    pSubmitInfo->pWaitDstStageMask = waitStages;
+
+    pSubmitInfo->commandBufferCount = 1;
+    pSubmitInfo->pCommandBuffers = pApp->commandBuffers+imageIndex;
+
+    VkSemaphore signalSemaphores[] = {*(pApp->pRenderFinishedSemaphore)};
+    pSubmitInfo->signalSemaphoreCount = 1;
+    pSubmitInfo->pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(*(pApp->pGraphicsQueue), 1, pSubmitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+        printf("Failed to submit draw command buffer\n");
+        return 1;
+    }
+
+    VkPresentInfoKHR *pPresentInfo = malloc(sizeof(VkPresentInfoKHR));
+    if (!pPresentInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pPresentInfo, 0, sizeof(VkPresentInfoKHR));
+    pPresentInfo->sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    pPresentInfo->waitSemaphoreCount = 1;
+    pPresentInfo->pWaitSemaphores = signalSemaphores;
+
+    VkSwapchainKHR swapChains[] = {*(pApp->pSwapChain)};
+    pPresentInfo->swapchainCount = 1;
+    pPresentInfo->pSwapchains = swapChains;
+    pPresentInfo->pImageIndices = &imageIndex;
+    pPresentInfo->pResults = NULL;
+
+    vkQueuePresentKHR(*(pApp->pPresentQueue), pPresentInfo);
+
+    return 0;
+}
+
+int createSemaphores(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->pImageAvailableSemaphore = malloc(sizeof(VkSemaphore));
+    pApp->pRenderFinishedSemaphore = malloc(sizeof(VkSemaphore));
+    if (!pApp->pImageAvailableSemaphore || !pApp->pRenderFinishedSemaphore) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pApp->pImageAvailableSemaphore, 0, sizeof(VkSemaphore));
+    memset(pApp->pRenderFinishedSemaphore, 0, sizeof(VkSemaphore));
+
+    VkSemaphoreCreateInfo *pSemaphoreInfo = malloc(sizeof(VkSemaphoreCreateInfo));
+    if (!pSemaphoreInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pSemaphoreInfo, 0, sizeof(VkSemaphoreCreateInfo));
+    pSemaphoreInfo->sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    if (vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pImageAvailableSemaphore) != VK_SUCCESS ||
+        vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pRenderFinishedSemaphore) != VK_SUCCESS) {
+        printf("Failed to create semaphores\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+int createCommandBuffers(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->commandBuffers = malloc(sizeof(VkCommandBuffer) * pApp->swapChainImagesCount);
+    if (!pApp->commandBuffers) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    VkCommandBufferAllocateInfo *pAllocInfo = malloc(sizeof(VkCommandBufferAllocateInfo));
+    if (!pAllocInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pAllocInfo, 0, sizeof(VkCommandBufferAllocateInfo));
+    pAllocInfo->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    pAllocInfo->commandPool = *(pApp->pCommandPool);
+    pAllocInfo->level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    pAllocInfo->commandBufferCount = pApp->swapChainImagesCount;
+
+    if (vkAllocateCommandBuffers(*(pApp->pDevice), pAllocInfo, pApp->commandBuffers) != VK_SUCCESS) {
+        printf("Failed to allocate command buffers\n");
+        return 1;
+    }
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        VkCommandBufferBeginInfo *pBeginInfo = malloc(sizeof(VkCommandBufferBeginInfo));
+        if (!pBeginInfo) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        memset(pBeginInfo, 0, sizeof(VkCommandBufferBeginInfo));
+        pBeginInfo->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        pBeginInfo->flags = 0;
+        pBeginInfo->pInheritanceInfo = NULL;
+
+        if (vkBeginCommandBuffer(pApp->commandBuffers[i], pBeginInfo) != VK_SUCCESS) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+
+        VkRenderPassBeginInfo *pRenderPassInfo = malloc(sizeof(VkRenderPassBeginInfo));
+        if (!pRenderPassInfo) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        memset(pRenderPassInfo, 0, sizeof(VkRenderPassBeginInfo));
+        pRenderPassInfo->sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        pRenderPassInfo->renderPass = *(pApp->pRenderPass);
+        pRenderPassInfo->framebuffer = pApp->pSwapChainFramebuffers[i];
+        pRenderPassInfo->renderArea.offset.x = 0;
+        pRenderPassInfo->renderArea.offset.y = 0;
+        pRenderPassInfo->renderArea.extent = pApp->swapChainExtent;
+        VkClearValue *pClearColor = malloc(sizeof(VkClearValue));
+        if (!pClearColor) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        pClearColor->color.float32[0] = 0.0f;
+        pClearColor->color.float32[1] = 0.0f;
+        pClearColor->color.float32[2] = 0.0f;
+        pClearColor->color.float32[3] = 0.0f;
+        pRenderPassInfo->clearValueCount = 1;
+        pRenderPassInfo->pClearValues = pClearColor;
+
+        vkCmdBeginRenderPass(pApp->commandBuffers[i], pRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(pApp->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, *(pApp->pGraphicsPipeline));
+            vkCmdDraw(pApp->commandBuffers[i], 3, 1, 0, 0);
+        vkCmdEndRenderPass(pApp->commandBuffers[i]);
+
+        if (vkEndCommandBuffer(pApp->commandBuffers[i]) != VK_SUCCESS) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int createCommandPool(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    struct QueueFamilyIndices *pQueueFamilyIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pApp->pPhysicalDevice);
+
+    pApp->pCommandPool = malloc(sizeof(VkCommandPool));
+    if (!pApp->pCommandPool) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pApp->pCommandPool, 0, sizeof(VkCommandPool));
+    VkCommandPoolCreateInfo *pPoolInfo = malloc(sizeof(VkCommandPoolCreateInfo));
+    if (!pPoolInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pPoolInfo, 0, sizeof(VkCommandPoolCreateInfo));
+    pPoolInfo->sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pPoolInfo->queueFamilyIndex = pQueueFamilyIndices->graphicsFamily;
+    pPoolInfo->flags = 0;
+
+    if (vkCreateCommandPool(*(pApp->pDevice), pPoolInfo, NULL, pApp->pCommandPool) != VK_SUCCESS) {
+        printf("Failed to create command pool\n");
+        return 1;
+    }
+    return 0;
+}
+
 int createFramebuffers(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -713,6 +906,19 @@ int createRenderPass(void *_app) {
     pSubpass->colorAttachmentCount = 1;
     pSubpass->pColorAttachments = pColorAttachmentRef;
 
+    VkSubpassDependency *pDependency = malloc(sizeof(VkSubpassDependency));
+    if (!pDependency) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pDependency, 0, sizeof(VkSubpassDependency));
+    pDependency->srcSubpass = VK_SUBPASS_EXTERNAL;
+    pDependency->dstSubpass = 0;
+    pDependency->srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    pDependency->srcAccessMask = 0;
+    pDependency->dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    pDependency->dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
     pApp->pRenderPass = malloc(sizeof(VkRenderPass));
     if (!(pApp->pRenderPass)) {
         printf("OOM: dropping\n");
@@ -730,6 +936,8 @@ int createRenderPass(void *_app) {
     pRenderPassInfo->pAttachments = pColorAttachment;
     pRenderPassInfo->subpassCount = 1;
     pRenderPassInfo->pSubpasses = pSubpass;
+    pRenderPassInfo->dependencyCount = 1;
+    pRenderPassInfo->pDependencies = pDependency;
 
     if (vkCreateRenderPass(*(pApp->pDevice), pRenderPassInfo, NULL, pApp->pRenderPass) != VK_SUCCESS) {
         printf("Failed to create render pass\n");
@@ -1153,6 +1361,21 @@ int initVulkan(void *_app) {
         return 1;
     }
 
+    if (createCommandPool(pApp)) {
+        printf("Failed to create command pool\n");
+        return 1;
+    }
+
+    if (createCommandBuffers(pApp)) {
+        printf("Failed to create command buffers\n");
+        return 1;
+    }
+
+    if (createSemaphores(pApp)) {
+        printf("Failed to create semaphores\n");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -1161,13 +1384,21 @@ int mainLoop(void *_app) {
 
     while (!glfwWindowShouldClose(pApp->pWindow)) {
         glfwPollEvents();
+        drawFrame(pApp);
     }
+
+    vkDeviceWaitIdle(*(pApp->pDevice));
 
     return 0;
 }
 
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    vkDestroySemaphore(*(pApp->pDevice), *(pApp->pRenderFinishedSemaphore), NULL);
+    vkDestroySemaphore(*(pApp->pDevice), *(pApp->pImageAvailableSemaphore), NULL);
+
+    vkDestroyCommandPool(*(pApp->pDevice), *(pApp->pCommandPool), NULL);
 
     for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
         vkDestroyFramebuffer(*(pApp->pDevice), *(pApp->pSwapChainFramebuffers + i), NULL);
