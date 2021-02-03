@@ -12,6 +12,8 @@
 const int WIDTH = 800;
 const int HEIGHT = 600;
 
+const int MAX_FRAMES_IN_FLIGHT = 2;
+
 const uint32_t validationLayerCount = 1;
 const char **validationLayers; /* see init later in "initValidationLayers" */
 
@@ -67,8 +69,11 @@ struct HelloTriangleApp {
     VkFramebuffer *pSwapChainFramebuffers;
     VkCommandPool *pCommandPool;
     VkCommandBuffer *commandBuffers;
-    VkSemaphore *pImageAvailableSemaphore;
-    VkSemaphore *pRenderFinishedSemaphore;
+    VkSemaphore *pImageAvailableSemaphores;
+    VkSemaphore *pRenderFinishedSemaphores;
+    VkFence *pInFlightFences;
+    VkFence **ppImagesInFlight;
+    uint32_t currentFrame;
 };
 
 /* functions */
@@ -194,6 +199,8 @@ int setupDebugMessenger(void *_app) {
         return 1;
     }
 
+    free(pCreateInfo);
+
     return 0;
 }
 
@@ -242,9 +249,12 @@ int checkValidationLayerSupport() {
         }
 
         if (!layerFound) {
+            free(availableLayers);
             return 1;
         }
     }
+
+    free(availableLayers);
 
     return 0;
 }
@@ -453,8 +463,15 @@ VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) 
 int drawFrame(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
+    vkWaitForFences(*(pApp->pDevice), 1, pApp->pInFlightFences + pApp->currentFrame, VK_TRUE, UINT64_MAX);
+
     uint32_t imageIndex;
-    vkAcquireNextImageKHR(*(pApp->pDevice), *(pApp->pSwapChain), UINT64_MAX, *(pApp->pImageAvailableSemaphore), VK_NULL_HANDLE, &imageIndex);
+    vkAcquireNextImageKHR(*(pApp->pDevice), *(pApp->pSwapChain), UINT64_MAX, *(pApp->pImageAvailableSemaphores + pApp->currentFrame), VK_NULL_HANDLE, &imageIndex);
+
+    if (**(pApp->ppImagesInFlight + imageIndex) != VK_NULL_HANDLE) {
+        vkWaitForFences(*(pApp->pDevice), 1, *(pApp->ppImagesInFlight + imageIndex), VK_TRUE, UINT64_MAX);
+    }
+    *(pApp->ppImagesInFlight + imageIndex) = pApp->pInFlightFences + pApp->currentFrame;
 
     VkSubmitInfo *pSubmitInfo = malloc(sizeof(VkSubmitInfo));
     if (!pSubmitInfo) {
@@ -464,7 +481,7 @@ int drawFrame(void *_app) {
     memset(pSubmitInfo, 0, sizeof(VkSubmitInfo));
     pSubmitInfo->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    VkSemaphore waitSemaphores[] = {*(pApp->pImageAvailableSemaphore)};
+    VkSemaphore waitSemaphores[] = {*(pApp->pImageAvailableSemaphores + pApp->currentFrame)};
     VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 
     pSubmitInfo->waitSemaphoreCount = 1;
@@ -472,13 +489,15 @@ int drawFrame(void *_app) {
     pSubmitInfo->pWaitDstStageMask = waitStages;
 
     pSubmitInfo->commandBufferCount = 1;
-    pSubmitInfo->pCommandBuffers = pApp->commandBuffers+imageIndex;
+    pSubmitInfo->pCommandBuffers = pApp->commandBuffers + imageIndex;
 
-    VkSemaphore signalSemaphores[] = {*(pApp->pRenderFinishedSemaphore)};
+    VkSemaphore signalSemaphores[] = {*(pApp->pRenderFinishedSemaphores + pApp->currentFrame)};
     pSubmitInfo->signalSemaphoreCount = 1;
     pSubmitInfo->pSignalSemaphores = signalSemaphores;
 
-    if (vkQueueSubmit(*(pApp->pGraphicsQueue), 1, pSubmitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+    vkResetFences(*(pApp->pDevice), 1, pApp->pInFlightFences + pApp->currentFrame);
+
+    if (vkQueueSubmit(*(pApp->pGraphicsQueue), 1, pSubmitInfo, *(pApp->pInFlightFences + pApp->currentFrame)) != VK_SUCCESS) {
         printf("Failed to submit draw command buffer\n");
         return 1;
     }
@@ -501,20 +520,26 @@ int drawFrame(void *_app) {
 
     vkQueuePresentKHR(*(pApp->pPresentQueue), pPresentInfo);
 
+    pApp->currentFrame++;
+    pApp->currentFrame %= MAX_FRAMES_IN_FLIGHT;
+
     return 0;
 }
 
-int createSemaphores(void *_app) {
+int createSyncObjects(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
-    pApp->pImageAvailableSemaphore = malloc(sizeof(VkSemaphore));
-    pApp->pRenderFinishedSemaphore = malloc(sizeof(VkSemaphore));
-    if (!pApp->pImageAvailableSemaphore || !pApp->pRenderFinishedSemaphore) {
+    pApp->pImageAvailableSemaphores = malloc(sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+    pApp->pRenderFinishedSemaphores = malloc(sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+    pApp->pInFlightFences = malloc(sizeof(VkFence) * MAX_FRAMES_IN_FLIGHT);
+    pApp->ppImagesInFlight = malloc(sizeof(VkFence *) * pApp->swapChainImagesCount);
+    if (!pApp->pImageAvailableSemaphores || !pApp->pRenderFinishedSemaphores || !pApp->pInFlightFences || !pApp->ppImagesInFlight) {
         printf("OOM: dropping\n");
         return 1;
     }
-    memset(pApp->pImageAvailableSemaphore, 0, sizeof(VkSemaphore));
-    memset(pApp->pRenderFinishedSemaphore, 0, sizeof(VkSemaphore));
+    memset(pApp->pImageAvailableSemaphores, 0, sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+    memset(pApp->pRenderFinishedSemaphores, 0, sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+    memset(pApp->pInFlightFences, 0, sizeof(VkFence) * MAX_FRAMES_IN_FLIGHT);
 
     VkSemaphoreCreateInfo *pSemaphoreInfo = malloc(sizeof(VkSemaphoreCreateInfo));
     if (!pSemaphoreInfo) {
@@ -523,10 +548,30 @@ int createSemaphores(void *_app) {
     }
     memset(pSemaphoreInfo, 0, sizeof(VkSemaphoreCreateInfo));
     pSemaphoreInfo->sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    if (vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pImageAvailableSemaphore) != VK_SUCCESS ||
-        vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pRenderFinishedSemaphore) != VK_SUCCESS) {
-        printf("Failed to create semaphores\n");
+
+    VkFenceCreateInfo *pFenceInfo = malloc(sizeof(VkFenceCreateInfo));
+    if (!pFenceInfo) {
+        printf("OOM: dropping\n");
         return 1;
+    }
+    memset(pFenceInfo, 0, sizeof(VkFenceCreateInfo));
+    pFenceInfo->sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    pFenceInfo->flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    VkFence *pFenceHandle = malloc(sizeof(VkFence));
+    *pFenceHandle = VK_NULL_HANDLE;
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pImageAvailableSemaphores + i) != VK_SUCCESS ||
+            vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pRenderFinishedSemaphores + i) != VK_SUCCESS ||
+            vkCreateFence(*(pApp->pDevice), pFenceInfo, NULL, pApp->pInFlightFences + i)) {
+            printf("Failed to create synchronization objects for a frame\n");
+            return 1;
+        }
+    }
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        *(pApp->ppImagesInFlight + i) = pFenceHandle;
     }
 
     return 0;
@@ -564,12 +609,15 @@ int createCommandBuffers(void *_app) {
             return 1;
         }
         memset(pBeginInfo, 0, sizeof(VkCommandBufferBeginInfo));
+#ifndef NDEBUG
+        printf("Command buffer: %p\n", pApp->commandBuffers[i]);
+#endif
         pBeginInfo->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         pBeginInfo->flags = 0;
         pBeginInfo->pInheritanceInfo = NULL;
 
         if (vkBeginCommandBuffer(pApp->commandBuffers[i], pBeginInfo) != VK_SUCCESS) {
-            printf("OOM: dropping\n");
+            printf("Failed to begin recording command buffer\n");
             return 1;
         }
 
@@ -590,6 +638,7 @@ int createCommandBuffers(void *_app) {
             printf("OOM: dropping\n");
             return 1;
         }
+        memset(pClearColor, 0, sizeof(VkClearValue));
         pClearColor->color.float32[0] = 0.0f;
         pClearColor->color.float32[1] = 0.0f;
         pClearColor->color.float32[2] = 0.0f;
@@ -603,7 +652,7 @@ int createCommandBuffers(void *_app) {
         vkCmdEndRenderPass(pApp->commandBuffers[i]);
 
         if (vkEndCommandBuffer(pApp->commandBuffers[i]) != VK_SUCCESS) {
-            printf("OOM: dropping\n");
+            printf("Failed to submit draw command buffer\n");
             return 1;
         }
     }
@@ -1371,7 +1420,7 @@ int initVulkan(void *_app) {
         return 1;
     }
 
-    if (createSemaphores(pApp)) {
+    if (createSyncObjects(pApp)) {
         printf("Failed to create semaphores\n");
         return 1;
     }
@@ -1395,8 +1444,11 @@ int mainLoop(void *_app) {
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
-    vkDestroySemaphore(*(pApp->pDevice), *(pApp->pRenderFinishedSemaphore), NULL);
-    vkDestroySemaphore(*(pApp->pDevice), *(pApp->pImageAvailableSemaphore), NULL);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        vkDestroyFence(*(pApp->pDevice), *(pApp->pInFlightFences + i), NULL);
+        vkDestroySemaphore(*(pApp->pDevice), *(pApp->pRenderFinishedSemaphores + i), NULL);
+        vkDestroySemaphore(*(pApp->pDevice), *(pApp->pImageAvailableSemaphores + i), NULL);
+    }
 
     vkDestroyCommandPool(*(pApp->pDevice), *(pApp->pCommandPool), NULL);
 
@@ -1433,6 +1485,8 @@ int cleanup(void *_app) {
 
 int run(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    pApp->currentFrame = 0;
 
     if (initWindow(pApp)) {
         printf("Failed to initialize window\n");
