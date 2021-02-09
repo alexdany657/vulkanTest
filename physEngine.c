@@ -100,11 +100,11 @@ int initValidationLayers() {
     return 0;
 }
 
-char *readFile(const char *fname, uint32_t *sizeBuff) {
+uint32_t readFileSize(const char *fname) {
     FILE *fd = fopen(fname, "r");
     if (!fd) {
         printf("Failed to read file\n");
-        return NULL;
+        return 0;
     }
 
     uint32_t size = 0;
@@ -112,18 +112,24 @@ char *readFile(const char *fname, uint32_t *sizeBuff) {
 
     fclose(fd);
 
-    *sizeBuff = size;
-    char *data = malloc(sizeof(char) * size);
-    if (!data) {
-        printf("OOM: dropping\n");
-        return NULL;
+    return size;
+}
+
+int readFile(const char *fname, char *buff, uint32_t sizeBuff) {
+    FILE *fd = fopen(fname, "r");
+    if (!fd) {
+        printf("Failed to read file\n");
+        return 1;
+    }
+    if (!buff) {
+        printf("Bad buffer\n");
+        return 1;
     }
 
-    fd = fopen(fname, "r");
-    fread(data, 1, size, fd);
+    fread(buff, 1, sizeBuff, fd);
     fclose(fd);
 
-    return data;
+    return 0;
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -204,6 +210,7 @@ int setupDebugMessenger(void *_app) {
     return 0;
 }
 
+/* TODO: free returned pointer when unused */
 void *getRequiredExtensions(uint32_t *size) {
     uint32_t glfwExtensionCount = 0;
     const char **glfwExtensions;
@@ -294,22 +301,22 @@ void *chooseSwapSurfaceFormat(VkSurfaceFormatKHR *availableFormats, uint32_t cou
     return availableFormats;
 }
 
-void *querySwapChainSupport(void *_app, void *_device) {
+int querySwapChainSupport(void *_app, void *_device, void *_pDetailsBuff) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
 
-    struct SwapChainSupportDetails *pDetails = malloc(sizeof(struct SwapChainSupportDetails));
+    struct SwapChainSupportDetails *pDetails = (struct SwapChainSupportDetails *)_pDetailsBuff;
     if (!pDetails) {
-        printf("OOM: dropping\n");
-        return NULL;
+        printf("Bad buffer\n");
+        return 1;
     }
     memset(pDetails, 0, sizeof(struct SwapChainSupportDetails));
 
     pDetails->pCapabilities = malloc(sizeof(VkSurfaceCapabilitiesKHR));
     if (!pDetails->pCapabilities) {
         printf("OOM: dropping\n");
-        return NULL;
+        return 1;
     }
 
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(*pDevice, *(pApp->pSurface), pDetails->pCapabilities);
@@ -319,7 +326,7 @@ void *querySwapChainSupport(void *_app, void *_device) {
         pDetails->formats = malloc(sizeof(VkSurfaceFormatKHR) * pDetails->formatCount);
         if (!pDetails->formats) {
             printf("OOM: dropping\n");
-            return NULL;
+            return 1;
         }
         vkGetPhysicalDeviceSurfaceFormatsKHR(*pDevice, *(pApp->pSurface), &(pDetails->formatCount), pDetails->formats);
     }
@@ -329,24 +336,25 @@ void *querySwapChainSupport(void *_app, void *_device) {
         pDetails->presentModes = malloc(sizeof(VkPresentModeKHR) * pDetails->presentModeCount);
         if (!pDetails->presentModes) {
             printf("OOM: dropping\n");
-            return NULL;
+            return 1;
         }
         vkGetPhysicalDeviceSurfacePresentModesKHR(*pDevice, *(pApp->pSurface), &(pDetails->presentModeCount), pDetails->presentModes);
     }
 
-    return pDetails;
+    return 0;
 }
 
-void *findQueueFamilies(void *_app, void *_device) {
+int findQueueFamilies(void *_app, void *_device, void *_pIndicesBuff) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
 
-    struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
+    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)_pIndicesBuff;
     if (!(pIndices)) {
-        printf("OOM: dropping\n");
-        return NULL;
+        printf("Bad buffer\n");
+        return 1;
     }
+    memset(pIndices, 0, sizeof(struct QueueFamilyIndices));
 
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(*pDevice, &queueFamilyCount, NULL);
@@ -373,7 +381,7 @@ void *findQueueFamilies(void *_app, void *_device) {
         }
     }
 
-    return pIndices;
+    return 0;
 }
 
 int8_t checkDeviceExtensionsSupport(void *_device) {
@@ -419,13 +427,26 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     VkPhysicalDeviceFeatures *pDeviceFeatures = malloc(sizeof(VkPhysicalDeviceFeatures));
     vkGetPhysicalDeviceFeatures(*pDevice, pDeviceFeatures);
 
-    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pDevice);
+    struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
     if (!pIndices) {
-        return 0;
+        printf("OOM: dropping\n");
+        abort(); /* FIXME */
     }
-    struct SwapChainSupportDetails *pSwapChainSupport = querySwapChainSupport(pApp, pDevice);
+    if (findQueueFamilies(pApp, pDevice, pIndices)) {
+        printf("Failed to find queue families\n");
+        abort(); /* FIXME */
+    }
+    struct SwapChainSupportDetails *pSwapChainSupport = malloc(sizeof(struct SwapChainSupportDetails));
     if (!pSwapChainSupport) {
-        return 0;
+        printf("OOM: dropping\n");
+        abort(); /* FIXME */
+    }
+    if (querySwapChainSupport(pApp, pDevice, pSwapChainSupport)) {
+        printf("Failed to query swap chain support details\n");
+        abort(); /* FIXME */
+    }
+    if (!pSwapChainSupport) {
+        abort(); /* FIXME */
     }
 
     int8_t indicesComplete = pIndices && pIndices->graphicsFamilyHV && pIndices->presentFamilyHV;
@@ -663,7 +684,15 @@ int createCommandBuffers(void *_app) {
 int createCommandPool(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
-    struct QueueFamilyIndices *pQueueFamilyIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pApp->pPhysicalDevice);
+    struct QueueFamilyIndices *pQueueFamilyIndices = malloc(sizeof(struct QueueFamilyIndices));
+    if (!pQueueFamilyIndices) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    if (findQueueFamilies(pApp, pApp->pPhysicalDevice, pQueueFamilyIndices)) {
+        printf("Faield to find queue families\n");
+        return 1;
+    }
 
     pApp->pCommandPool = malloc(sizeof(VkCommandPool));
     if (!pApp->pCommandPool) {
@@ -719,8 +748,22 @@ int createGraphicsPipeline(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     uint32_t vertShaderCodeSize, fragShaderCodeSize;
-    char *vertShaderCode = readFile("vert.spv", &vertShaderCodeSize);
-    char *fragShaderCode = readFile("frag.spv", &fragShaderCodeSize);
+    vertShaderCodeSize = readFileSize("vert.spv");
+    fragShaderCodeSize = readFileSize("frag.spv");
+    char *vertShaderCode = malloc(vertShaderCodeSize);
+    char *fragShaderCode = malloc(fragShaderCodeSize);
+    if (!vertShaderCode || !fragShaderCode) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    if (readFile("vert.spv", vertShaderCode, vertShaderCodeSize)) {
+        printf("Failed to read vertex shader code\n");
+        return 1;
+    }
+    if (readFile("frag.spv", fragShaderCode, fragShaderCodeSize)) {
+        printf("Failed to read fragment shader code\n");
+        return 1;
+    }
 
     VkShaderModule *vertShaderModule = createShaderModule(pApp, vertShaderCode, vertShaderCodeSize);
     if (!vertShaderModule) {
@@ -914,6 +957,10 @@ int createGraphicsPipeline(void *_app) {
 
     vkDestroyShaderModule(*(pApp->pDevice), *vertShaderModule, NULL);
     vkDestroyShaderModule(*(pApp->pDevice), *fragShaderModule, NULL);
+    free(vertShaderCode);
+    free(fragShaderCode);
+
+    /* TODO: free all create infos */
 
     return 0;
 }
@@ -1049,7 +1096,15 @@ int createSwapChain(void *_app) {
         return 1;
     }
 
-    struct SwapChainSupportDetails *pSwapChainSupport = (struct SwapChainSupportDetails *)querySwapChainSupport(pApp, pApp->pPhysicalDevice);
+    struct SwapChainSupportDetails *pSwapChainSupport = malloc(sizeof(struct SwapChainSupportDetails));
+    if (!pSwapChainSupport) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    if (querySwapChainSupport(pApp, pApp->pPhysicalDevice, pSwapChainSupport)) {
+        printf("Failed to query swap chain support details\n");
+        return 1;
+    }
 
     VkSurfaceFormatKHR *pSurfaceFormat = (VkSurfaceFormatKHR *)chooseSwapSurfaceFormat(pSwapChainSupport->formats, pSwapChainSupport->formatCount);
 #ifndef NDEBUG
@@ -1081,8 +1136,12 @@ int createSwapChain(void *_app) {
     pCreateInfo->imageArrayLayers = 1;
     pCreateInfo->imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    struct QueueFamilyIndices *pIndices = (struct QueueFamilyIndices *)findQueueFamilies(pApp, pApp->pPhysicalDevice);
+    struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
     if (!pIndices) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    if (findQueueFamilies(pApp, pApp->pPhysicalDevice, pIndices)) {
         printf("Failed to find queue families\n");
         return 1;
     }
@@ -1160,7 +1219,15 @@ int createLogicalDevice(void *_app) {
         return 1;
     }
 
-    struct QueueFamilyIndices *pIndices = findQueueFamilies(pApp, pApp->pPhysicalDevice);
+    struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
+    if (!pIndices) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    if (findQueueFamilies(pApp, pApp->pPhysicalDevice, pIndices)) {
+        printf("Failed to find queue families\n");
+        return 1;
+    }
     int queueCreateInfoCount = 1;
     if (pIndices->graphicsFamily != pIndices->presentFamily) {
         queueCreateInfoCount++;
