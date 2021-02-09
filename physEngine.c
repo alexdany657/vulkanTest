@@ -78,6 +78,20 @@ struct HelloTriangleApp {
 
 /* functions */
 
+void freeQueueFamilyIndices(void *_pIndices) {
+    free(_pIndices);
+}
+
+void freeSwapChainSupportDetails(void *_pDetails) {
+    struct SwapChainSupportDetails *pDetails = (struct SwapChainSupportDetails *)_pDetails;
+
+    free(pDetails->pCapabilities);
+    free(pDetails->formats);
+    free(pDetails->presentModes);
+
+    free(pDetails);
+}
+
 int initDeviceExtensions() {
     deviceExtensions = malloc(sizeof(char *) * deviceExtensionsCount);
     if (!deviceExtensions) {
@@ -221,6 +235,10 @@ void *getRequiredExtensions(uint32_t *size) {
     }
     const char **extensions;
     extensions = malloc(sizeof(char *) * (glfwExtensionCount + 1));
+    if (!extensions) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
     memcpy(extensions, glfwExtensions, sizeof(char *) * glfwExtensionCount);
     if (!extensions) {
         printf("OOM: dropping\n");
@@ -360,6 +378,10 @@ int findQueueFamilies(void *_app, void *_device, void *_pIndicesBuff) {
     vkGetPhysicalDeviceQueueFamilyProperties(*pDevice, &queueFamilyCount, NULL);
 
     VkQueueFamilyProperties *pQueueFamilies = malloc(sizeof(VkQueueFamilyProperties) * queueFamilyCount);
+    if (!pQueueFamilies) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
     vkGetPhysicalDeviceQueueFamilyProperties(*pDevice, &queueFamilyCount, pQueueFamilies);
 
     for (uint32_t i = 0; i < queueFamilyCount; ++i) {
@@ -380,6 +402,8 @@ int findQueueFamilies(void *_app, void *_device, void *_pIndicesBuff) {
             break;
         }
     }
+
+    free(pQueueFamilies);
 
     return 0;
 }
@@ -411,9 +435,12 @@ int8_t checkDeviceExtensionsSupport(void *_device) {
         }
 
         if (!found) {
+            free(availableExtensions);
             return 1;
         }
     }
+
+    free(availableExtensions);
 
     return 0;
 }
@@ -422,9 +449,17 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     VkPhysicalDevice *pDevice = (VkPhysicalDevice *)_device;
 
     VkPhysicalDeviceProperties *pDeviceProperties = malloc(sizeof(VkPhysicalDeviceProperties));
+    if (!pDeviceProperties) {
+        printf("OOM: dropping\n");
+        abort(); /* FIXME */
+    }
     vkGetPhysicalDeviceProperties(*pDevice, pDeviceProperties);
     
     VkPhysicalDeviceFeatures *pDeviceFeatures = malloc(sizeof(VkPhysicalDeviceFeatures));
+    if (!pDeviceFeatures) {
+        printf("OOM: dropping\n");
+        abort(); /* FIXME */
+    }
     vkGetPhysicalDeviceFeatures(*pDevice, pDeviceFeatures);
 
     struct QueueFamilyIndices *pIndices = malloc(sizeof(struct QueueFamilyIndices));
@@ -453,6 +488,11 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     int8_t extensionsSupported = !checkDeviceExtensionsSupport(pDevice);
     int8_t swapChainAdequate = pSwapChainSupport->formatCount && pSwapChainSupport->presentModeCount;
 
+    freeQueueFamilyIndices(pIndices);
+    freeSwapChainSupportDetails(pSwapChainSupport);
+    free(pDeviceProperties);
+    free(pDeviceFeatures);
+
     return indicesComplete && extensionsSupported && swapChainAdequate;
 }
 
@@ -477,6 +517,8 @@ VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) 
         printf("Failed to create shader module\n");
         return NULL;
     }
+
+    free(pCreateInfo);
 
     return pShaderModule;
 }
@@ -523,6 +565,8 @@ int drawFrame(void *_app) {
         return 1;
     }
 
+    free(pSubmitInfo);
+
     VkPresentInfoKHR *pPresentInfo = malloc(sizeof(VkPresentInfoKHR));
     if (!pPresentInfo) {
         printf("OOM: dropping\n");
@@ -540,6 +584,8 @@ int drawFrame(void *_app) {
     pPresentInfo->pResults = NULL;
 
     vkQueuePresentKHR(*(pApp->pPresentQueue), pPresentInfo);
+
+    free(pPresentInfo);
 
     pApp->currentFrame++;
     pApp->currentFrame %= MAX_FRAMES_IN_FLIGHT;
@@ -595,6 +641,9 @@ int createSyncObjects(void *_app) {
         *(pApp->ppImagesInFlight + i) = pFenceHandle;
     }
 
+    free(pSemaphoreInfo);
+    free(pFenceInfo);
+
     return 0;
 }
 
@@ -623,6 +672,8 @@ int createCommandBuffers(void *_app) {
         return 1;
     }
 
+    free(pAllocInfo);
+
     for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
         VkCommandBufferBeginInfo *pBeginInfo = malloc(sizeof(VkCommandBufferBeginInfo));
         if (!pBeginInfo) {
@@ -641,6 +692,8 @@ int createCommandBuffers(void *_app) {
             printf("Failed to begin recording command buffer\n");
             return 1;
         }
+
+        free(pBeginInfo);
 
         VkRenderPassBeginInfo *pRenderPassInfo = malloc(sizeof(VkRenderPassBeginInfo));
         if (!pRenderPassInfo) {
@@ -676,6 +729,9 @@ int createCommandBuffers(void *_app) {
             printf("Failed to submit draw command buffer\n");
             return 1;
         }
+
+        free(pRenderPassInfo);
+        free(pClearColor);
     }
 
     return 0;
@@ -714,6 +770,10 @@ int createCommandPool(void *_app) {
         printf("Failed to create command pool\n");
         return 1;
     }
+
+    free(pPoolInfo);
+    freeQueueFamilyIndices(pQueueFamilyIndices);
+
     return 0;
 }
 
@@ -740,10 +800,13 @@ int createFramebuffers(void *_app) {
             printf("OOM: dropping\n");
             return 1;
         }
+
+        free(pFramebufferInfo);
     }
     return 0;
 }
 
+/* TODO: adding frees stopped here */
 int createGraphicsPipeline(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -1408,6 +1471,8 @@ int createInstance(void *_app) {
     }
 
 #endif
+
+    free(glfwExtensions);
 
     return 0;
 }
