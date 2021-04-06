@@ -7,6 +7,8 @@
 #include <string.h>
 #include <math.h>
 
+/* stopped at Vertex buffer creation */
+
 /* constants */
 
 const int WIDTH = 800;
@@ -20,6 +22,9 @@ const char **validationLayers; /* see init later in "initValidationLayers" */
 const uint32_t deviceExtensionsCount = 1;
 const char **deviceExtensions;
 
+struct Vertex *vertices = NULL;
+const int vertex_count = 3;
+
 #ifdef NDEBUG
 const int8_t enableValidationLayers = 0;
 #else
@@ -31,6 +36,11 @@ int SHUT_UP_GCC_INT;
 void *SHUT_UP_GCC_PTR;
 
 /* structures */
+
+struct Vertex {
+    vec2 pos;
+    vec3 color;
+};
 
 struct SwapChainSupportDetails {
     VkSurfaceCapabilitiesKHR *pCapabilities;
@@ -76,6 +86,8 @@ struct HelloTriangleApp {
     uint32_t currentFrame;
 
     int framebufferResized;
+    VkBuffer *pVertexBuffer;
+    VkDeviceMemory *pVertexBufferMemory;
 };
 
 /* declarations */
@@ -538,9 +550,160 @@ static void framebufferResizeCallback(GLFWwindow *pWindow, int width, int height
     pApp->framebufferResized = 1;
 }
 
+int initVertices() {
+    vertices = malloc(sizeof(struct Vertex) * vertex_count);
+    if (!vertices) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    (vertices+0)->pos[0] = 0.0f;
+    (vertices+0)->pos[1] = -0.5f;
+    (vertices+0)->color[0] = 1.0f;
+    (vertices+0)->color[1] = 0.0f;
+    (vertices+0)->color[2] = 0.0f;
+
+    (vertices+1)->pos[0] = 0.5f;
+    (vertices+1)->pos[1] = 0.5f;
+    (vertices+1)->color[0] = 0.0f;
+    (vertices+1)->color[1] = 1.0f;
+    (vertices+1)->color[2] = 0.0f;
+
+    (vertices+2)->pos[0] = -0.5f;
+    (vertices+2)->pos[1] = 0.5f;
+    (vertices+2)->color[0] = 0.0f;
+    (vertices+2)->color[1] = 0.0f;
+    (vertices+2)->color[2] = 1.0f;
+
+    return 0;
+}
+
+static VkVertexInputBindingDescription *getBindingDescription() {
+    VkVertexInputBindingDescription *pBindingDescription = malloc(sizeof(VkVertexInputBindingDescription));
+
+    if (!pBindingDescription) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+
+    pBindingDescription->binding = 0;
+    pBindingDescription->stride = sizeof(struct Vertex);
+    pBindingDescription->inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    return pBindingDescription;
+}
+
+static VkVertexInputAttributeDescription *getAttributeDescriptions() {
+    VkVertexInputAttributeDescription *pAttributeDescriptions = malloc(sizeof(VkVertexInputAttributeDescription) * 2);
+
+    if (!pAttributeDescriptions) {
+        printf("OOM: dropping\n");
+        return NULL;
+    }
+
+    (pAttributeDescriptions+0)->binding = 0;
+    (pAttributeDescriptions+0)->location = 0;
+    (pAttributeDescriptions+0)->format = VK_FORMAT_R32G32_SFLOAT;
+    (pAttributeDescriptions+0)->offset = offsetof(struct Vertex, pos);
+
+    (pAttributeDescriptions+1)->binding = 0;
+    (pAttributeDescriptions+1)->location = 1;
+    (pAttributeDescriptions+1)->format = VK_FORMAT_R32G32B32_SFLOAT;
+    (pAttributeDescriptions+1)->offset = offsetof(struct Vertex, color);
+
+    return pAttributeDescriptions;
+}
+
+uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkPhysicalDeviceMemoryProperties *pMemProperties = malloc(sizeof(VkPhysicalDeviceMemoryProperties));
+    if (!pMemProperties) {
+        printf("OOM: dropping\n");
+        return UINT32_MAX;
+    }
+
+    vkGetPhysicalDeviceMemoryProperties(*(pApp->pPhysicalDevice), pMemProperties);
+
+    for (uint32_t i = 0; i < pMemProperties->memoryTypeCount; ++i) {
+        if ((typeFilter & (1 << i)) && ((pMemProperties->memoryTypes + i)->propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+
+    return UINT32_MAX;
+}
+
 /*--------------------------------------------------------*/
 /* End of helper functions                                */
 /*--------------------------------------------------------*/
+
+int createVertexBuffer(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkBufferCreateInfo *pBufferInfo = malloc(sizeof(VkBufferCreateInfo));
+    if (!pBufferInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pBufferInfo, 0, sizeof(VkBufferCreateInfo));
+
+    pBufferInfo->sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    pBufferInfo->size = sizeof(struct Vertex) * vertex_count;
+
+    pBufferInfo->usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    pBufferInfo->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    pApp->pVertexBuffer = malloc(sizeof(VkBuffer));
+    if (!pApp->pVertexBuffer) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    if (vkCreateBuffer(*(pApp->pDevice), pBufferInfo, NULL, pApp->pVertexBuffer) != VK_SUCCESS) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    VkMemoryRequirements *pMemRequirements = malloc(sizeof(VkMemoryRequirements));
+    if (!pMemRequirements) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    vkGetBufferMemoryRequirements(*(pApp->pDevice), *(pApp->pVertexBuffer), pMemRequirements);
+
+    VkMemoryAllocateInfo *pAllocInfo = malloc(sizeof(VkMemoryAllocateInfo));
+    if (!pAllocInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pAllocInfo, 0, sizeof(VkMemoryAllocateInfo));
+
+    pAllocInfo->sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    pAllocInfo->allocationSize = pMemRequirements->size;
+    pAllocInfo->memoryTypeIndex = findMemoryType(pApp, pMemRequirements->memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    pApp->pVertexBufferMemory = malloc(sizeof(VkDeviceMemory));
+    if (!pApp->pVertexBufferMemory) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    if (vkAllocateMemory(*(pApp->pDevice), pAllocInfo, NULL, pApp->pVertexBufferMemory) != VK_SUCCESS) {
+        printf("Failed to allocate vertex buffer memory\n");
+        return 1;
+    }
+
+    vkBindBufferMemory(*(pApp->pDevice), *(pApp->pVertexBuffer), *(pApp->pVertexBufferMemory), 0);
+
+    void *data;
+    vkMapMemory(*(pApp->pDevice), *(pApp->pVertexBufferMemory), 0, pBufferInfo->size, 0, &data);
+        memcpy(data, vertices, pBufferInfo->size);
+    vkUnmapMemory(*(pApp->pDevice), *(pApp->pVertexBufferMemory));
+
+    return 0;
+}
 
 int cleanupSwapChain(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
@@ -774,7 +937,10 @@ int createCommandBuffers(void *_app) {
 
         vkCmdBeginRenderPass(pApp->commandBuffers[i], pRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdBindPipeline(pApp->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, *(pApp->pGraphicsPipeline));
-            vkCmdDraw(pApp->commandBuffers[i], 3, 1, 0, 0);
+            VkBuffer vertexBuffers[] = {*(pApp->pVertexBuffer)};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(pApp->commandBuffers[i], 0, 1, vertexBuffers, offsets);
+            vkCmdDraw(pApp->commandBuffers[i], vertex_count, 1, 0, 0);
         vkCmdEndRenderPass(pApp->commandBuffers[i]);
 
         if (vkEndCommandBuffer(pApp->commandBuffers[i]) != VK_SUCCESS) {
@@ -914,6 +1080,10 @@ int createGraphicsPipeline(void *_app) {
     }
     memset(pVertexInputInfo, 0, sizeof(VkPipelineVertexInputStateCreateInfo));
     pVertexInputInfo->sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    pVertexInputInfo->vertexBindingDescriptionCount = 1;
+    pVertexInputInfo->vertexAttributeDescriptionCount = 2;
+    pVertexInputInfo->pVertexBindingDescriptions = getBindingDescription();
+    pVertexInputInfo->pVertexAttributeDescriptions = getAttributeDescriptions();
     
     VkPipelineInputAssemblyStateCreateInfo *pInputAssembly = malloc(sizeof(VkPipelineInputAssemblyStateCreateInfo));
     if (!pInputAssembly) {
@@ -1619,6 +1789,11 @@ int initVulkan(void *_app) {
         return 1;
     }
 
+    if (createVertexBuffer(pApp)) {
+        printf("Failed to create vertex buffer\n");
+        return 1;
+    }
+
     if (createCommandBuffers(pApp)) {
         printf("Failed to create command buffers\n");
         return 1;
@@ -1651,6 +1826,9 @@ int cleanup(void *_app) {
     if (cleanupSwapChain(pApp)) {
         return 1;
     }
+
+    vkDestroyBuffer(*(pApp->pDevice), *(pApp->pVertexBuffer), NULL);
+    vkFreeMemory(*(pApp->pDevice), *(pApp->pVertexBufferMemory), NULL);
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         vkDestroyFence(*(pApp->pDevice), *(pApp->pInFlightFences + i), NULL);
@@ -1711,6 +1889,11 @@ int init() {
 
     if (initDeviceExtensions()) {
         printf("Failed to init required extensions\n");
+        return 1;
+    }
+
+    if (initVertices()) {
+        printf("Failed to init vertices\n");
         return 1;
     }
 
