@@ -74,7 +74,13 @@ struct HelloTriangleApp {
     VkFence *pInFlightFences;
     VkFence **ppImagesInFlight;
     uint32_t currentFrame;
+
+    int framebufferResized;
 };
+
+/* declarations */
+
+int recreateSwapChain(void *);
 
 /* functions */
 
@@ -523,13 +529,59 @@ VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) 
     return pShaderModule;
 }
 
+static void framebufferResizeCallback(GLFWwindow *pWindow, int width, int height) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)glfwGetWindowUserPointer(pWindow);
+
+    SHUT_UP_GCC_INT = width;
+    SHUT_UP_GCC_INT = height;
+
+    pApp->framebufferResized = 1;
+}
+
+/*--------------------------------------------------------*/
+/* End of helper functions                                */
+/*--------------------------------------------------------*/
+
+int cleanupSwapChain(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        vkDestroyFramebuffer(*(pApp->pDevice), *(pApp->pSwapChainFramebuffers + i), NULL);
+    }
+
+    vkFreeCommandBuffers(*(pApp->pDevice), *(pApp->pCommandPool), pApp->swapChainImagesCount, pApp->commandBuffers);
+
+    vkDestroyPipeline(*(pApp->pDevice), *(pApp->pGraphicsPipeline), NULL);
+
+    vkDestroyPipelineLayout(*(pApp->pDevice), *(pApp->pPipelineLayout), NULL);
+
+    vkDestroyRenderPass(*(pApp->pDevice), *(pApp->pRenderPass), NULL);
+
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        vkDestroyImageView(*(pApp->pDevice), *(pApp->swapChainImageViews + i), NULL);
+    }
+
+    vkDestroySwapchainKHR(*(pApp->pDevice), *(pApp->pSwapChain), NULL);
+
+    return 0;
+}
+
 int drawFrame(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     vkWaitForFences(*(pApp->pDevice), 1, pApp->pInFlightFences + pApp->currentFrame, VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex;
-    vkAcquireNextImageKHR(*(pApp->pDevice), *(pApp->pSwapChain), UINT64_MAX, *(pApp->pImageAvailableSemaphores + pApp->currentFrame), VK_NULL_HANDLE, &imageIndex);
+    VkResult result = vkAcquireNextImageKHR(*(pApp->pDevice), *(pApp->pSwapChain), UINT64_MAX, *(pApp->pImageAvailableSemaphores + pApp->currentFrame), VK_NULL_HANDLE, &imageIndex);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || pApp->framebufferResized) {
+        pApp->framebufferResized = 0;
+        recreateSwapChain(pApp);
+        return 0;
+    } else if (result != VK_SUCCESS) {
+        printf("Failed to acquire swap chain image");
+        return 1;
+    }
 
     if (**(pApp->ppImagesInFlight + imageIndex) != VK_NULL_HANDLE) {
         vkWaitForFences(*(pApp->pDevice), 1, *(pApp->ppImagesInFlight + imageIndex), VK_TRUE, UINT64_MAX);
@@ -1020,10 +1072,22 @@ int createGraphicsPipeline(void *_app) {
 
     vkDestroyShaderModule(*(pApp->pDevice), *vertShaderModule, NULL);
     vkDestroyShaderModule(*(pApp->pDevice), *fragShaderModule, NULL);
+    
+    free(pShaderStages);
+    free(pVertexInputInfo);
+    free(pInputAssembly);
+    free(pViewport);
+    free(pScissor);
+    free(pViewportState);
+    free(pRasterizer);
+    free(pMultisampling);
+    free(pColorBlendAttachment);
+    free(pColorBlending);
+    free(pDynamicState);
+    free(pPipelineLayoutInfo);
+
     free(vertShaderCode);
     free(fragShaderCode);
-
-    /* TODO: free all create infos */
 
     return 0;
 }
@@ -1102,6 +1166,12 @@ int createRenderPass(void *_app) {
         printf("Failed to create render pass\n");
         return 1;
     }
+
+    free(pColorAttachment);
+    free(pColorAttachmentRef);
+    free(pSubpass);
+    free(pDependency);
+    free(pRenderPassInfo);
 
     return 0;
 }
@@ -1472,7 +1542,7 @@ int createInstance(void *_app) {
 
 #endif
 
-    free(glfwExtensions);
+    /* free(glfwExtensions); FIXME: !!!*/
 
     return 0;
 }
@@ -1482,9 +1552,11 @@ int initWindow(void *_app) {
 
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     pApp->pWindow = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", NULL, NULL);
+    glfwSetWindowUserPointer(pApp->pWindow, pApp);
+    glfwSetFramebufferSizeCallback(pApp->pWindow, framebufferResizeCallback);
 
     return 0;
 }
@@ -1576,6 +1648,10 @@ int mainLoop(void *_app) {
 int cleanup(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
+    if (cleanupSwapChain(pApp)) {
+        return 1;
+    }
+
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         vkDestroyFence(*(pApp->pDevice), *(pApp->pInFlightFences + i), NULL);
         vkDestroySemaphore(*(pApp->pDevice), *(pApp->pRenderFinishedSemaphores + i), NULL);
@@ -1583,22 +1659,6 @@ int cleanup(void *_app) {
     }
 
     vkDestroyCommandPool(*(pApp->pDevice), *(pApp->pCommandPool), NULL);
-
-    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
-        vkDestroyFramebuffer(*(pApp->pDevice), *(pApp->pSwapChainFramebuffers + i), NULL);
-    }
-
-    vkDestroyPipeline(*(pApp->pDevice), *(pApp->pGraphicsPipeline), NULL);
-
-    vkDestroyPipelineLayout(*(pApp->pDevice), *(pApp->pPipelineLayout), NULL);
-
-    vkDestroyRenderPass(*(pApp->pDevice), *(pApp->pRenderPass), NULL);
-
-    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
-        vkDestroyImageView(*(pApp->pDevice), *(pApp->swapChainImageViews + i), NULL);
-    }
-
-    vkDestroySwapchainKHR(*(pApp->pDevice), *(pApp->pSwapChain), NULL);
 
     vkDestroyDevice(*(pApp->pDevice), NULL);
 
@@ -1651,6 +1711,49 @@ int init() {
 
     if (initDeviceExtensions()) {
         printf("Failed to init required extensions\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+int recreateSwapChain(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    int width = 0;
+    int height = 0;
+    while (width == 0 || height == 0) {
+        glfwGetFramebufferSize(pApp->pWindow, &width, &height);
+        glfwWaitEvents();
+    }
+
+    vkDeviceWaitIdle(*(pApp->pDevice));
+
+    if (cleanupSwapChain(pApp)) {
+        return 1;
+    }
+
+    if (createSwapChain(pApp)) {
+        return 1;
+    }
+
+    if (createImageViews(pApp)) {
+        return 1;
+    }
+
+    if (createRenderPass(pApp)) {
+        return 1;
+    }
+
+    if (createGraphicsPipeline(pApp)) {
+        return 1;
+    }
+
+    if (createFramebuffers(pApp)) {
+        return 1;
+    }
+
+    if (createCommandBuffers(pApp)) {
         return 1;
     }
 

@@ -1,7 +1,7 @@
 .PHONY: all debug clean
 
 CFLAGS=-Wall -Wextra -Werror -c
-CFLAGS.P=$(CFLAGS) -DNDEBUG
+CFLAGS.P=$(CFLAGS) -DNDEBUG -g
 CFLAGS.D=$(CFLAGS) -g
 LDFLAGS=`pkg-config --libs glfw3` `pkg-config --libs vulkan` -lm
 
