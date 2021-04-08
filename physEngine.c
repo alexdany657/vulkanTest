@@ -7,8 +7,6 @@
 #include <string.h>
 #include <math.h>
 
-/* stopped at Vertex buffer creation */
-
 /* constants */
 
 const int WIDTH = 800;
@@ -86,6 +84,7 @@ struct HelloTriangleApp {
     uint32_t currentFrame;
 
     int framebufferResized;
+
     VkBuffer *pVertexBuffer;
     VkDeviceMemory *pVertexBufferMemory;
 };
@@ -638,7 +637,81 @@ uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags p
 /* End of helper functions                                */
 /*--------------------------------------------------------*/
 
-int createVertexBuffer(void *_app) {
+int copyBuffer(void *_app, VkBuffer *pSrcBuffer, VkBuffer *pDstBuffer, VkDeviceSize size) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkCommandBufferAllocateInfo *pAllocInfo = malloc(sizeof(VkCommandBufferAllocateInfo));
+    if (!pAllocInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pAllocInfo, 0, sizeof(VkCommandBufferAllocateInfo));
+
+    pAllocInfo->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    pAllocInfo->level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    pAllocInfo->commandPool = *(pApp->pCommandPool);
+    pAllocInfo->commandBufferCount = 1;
+
+    VkCommandBuffer *pCommandBuffer = malloc(sizeof(VkCommandBuffer));
+    if (!pCommandBuffer) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    vkAllocateCommandBuffers(*(pApp->pDevice), pAllocInfo, pCommandBuffer);
+
+    VkCommandBufferBeginInfo *pBeginInfo = malloc(sizeof(VkCommandBufferBeginInfo));
+    if (!pBeginInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pBeginInfo, 0, sizeof(VkCommandBufferBeginInfo));
+
+    pBeginInfo->sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    pBeginInfo->flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(*pCommandBuffer, pBeginInfo);
+
+    VkBufferCopy *pCopyRegion = malloc(sizeof(VkBufferCopy));
+    if (!pCopyRegion) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pCopyRegion, 0, sizeof(VkBufferCopy));
+    pCopyRegion->srcOffset = 0;
+    pCopyRegion->dstOffset = 0;
+    pCopyRegion->size = size;
+
+    vkCmdCopyBuffer(*pCommandBuffer, *pSrcBuffer, *pDstBuffer, 1, pCopyRegion);
+
+    vkEndCommandBuffer(*pCommandBuffer);
+
+    VkSubmitInfo *pSubmitInfo = malloc(sizeof(VkSubmitInfo));
+    if (!pSubmitInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pSubmitInfo, 0, sizeof(VkSubmitInfo));
+
+    pSubmitInfo->sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    pSubmitInfo->commandBufferCount = 1;
+    pSubmitInfo->pCommandBuffers = pCommandBuffer;
+
+    vkQueueSubmit(*(pApp->pGraphicsQueue), 1, pSubmitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(*(pApp->pGraphicsQueue));
+
+    vkFreeCommandBuffers(*(pApp->pDevice), *(pApp->pCommandPool), 1, pCommandBuffer);
+
+    free(pAllocInfo);
+    free(pCommandBuffer);
+    free(pBeginInfo);
+    free(pCopyRegion);
+    free(pSubmitInfo);
+
+    return 0;
+}
+
+int createBuffer(void *_app, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer **ppBuffer, VkDeviceMemory **ppBufferMemory) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     VkBufferCreateInfo *pBufferInfo = malloc(sizeof(VkBufferCreateInfo));
@@ -649,21 +722,22 @@ int createVertexBuffer(void *_app) {
     memset(pBufferInfo, 0, sizeof(VkBufferCreateInfo));
 
     pBufferInfo->sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    pBufferInfo->size = sizeof(struct Vertex) * vertex_count;
+    pBufferInfo->size = size;
 
-    pBufferInfo->usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    pBufferInfo->usage = usage;
     pBufferInfo->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    pApp->pVertexBuffer = malloc(sizeof(VkBuffer));
-    if (!pApp->pVertexBuffer) {
+    *ppBuffer = malloc(sizeof(VkBuffer));
+    if (!(*ppBuffer)) {
         printf("OOM: dropping\n");
         return 1;
     }
 
-    if (vkCreateBuffer(*(pApp->pDevice), pBufferInfo, NULL, pApp->pVertexBuffer) != VK_SUCCESS) {
+    if (vkCreateBuffer(*(pApp->pDevice), pBufferInfo, NULL, *ppBuffer) != VK_SUCCESS) {
         printf("OOM: dropping\n");
         return 1;
     }
+
 
     VkMemoryRequirements *pMemRequirements = malloc(sizeof(VkMemoryRequirements));
     if (!pMemRequirements) {
@@ -671,7 +745,7 @@ int createVertexBuffer(void *_app) {
         return 1;
     }
 
-    vkGetBufferMemoryRequirements(*(pApp->pDevice), *(pApp->pVertexBuffer), pMemRequirements);
+    vkGetBufferMemoryRequirements(*(pApp->pDevice), **ppBuffer, pMemRequirements);
 
     VkMemoryAllocateInfo *pAllocInfo = malloc(sizeof(VkMemoryAllocateInfo));
     if (!pAllocInfo) {
@@ -682,25 +756,59 @@ int createVertexBuffer(void *_app) {
 
     pAllocInfo->sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     pAllocInfo->allocationSize = pMemRequirements->size;
-    pAllocInfo->memoryTypeIndex = findMemoryType(pApp, pMemRequirements->memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    pAllocInfo->memoryTypeIndex = findMemoryType(pApp, pMemRequirements->memoryTypeBits, properties);
 
-    pApp->pVertexBufferMemory = malloc(sizeof(VkDeviceMemory));
-    if (!pApp->pVertexBufferMemory) {
+    *ppBufferMemory = malloc(sizeof(VkDeviceMemory));
+    if (!(*ppBufferMemory)) {
         printf("OOM: dropping\n");
         return 1;
     }
 
-    if (vkAllocateMemory(*(pApp->pDevice), pAllocInfo, NULL, pApp->pVertexBufferMemory) != VK_SUCCESS) {
+    if (vkAllocateMemory(*(pApp->pDevice), pAllocInfo, NULL, *ppBufferMemory) != VK_SUCCESS) {
         printf("Failed to allocate vertex buffer memory\n");
         return 1;
     }
 
-    vkBindBufferMemory(*(pApp->pDevice), *(pApp->pVertexBuffer), *(pApp->pVertexBufferMemory), 0);
+    vkBindBufferMemory(*(pApp->pDevice), **ppBuffer, **ppBufferMemory, 0);
+
+    free(pBufferInfo);
+    free(pMemRequirements);
+    free(pAllocInfo);
+
+    return 0;
+}
+
+int createVertexBuffer(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkBuffer *pStagingBuffer = NULL;
+    VkDeviceMemory *pStagingBufferMemory = NULL;
+
+    VkDeviceSize bufferSize = sizeof(struct Vertex) * vertex_count;
+
+    if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &pStagingBuffer, &pStagingBufferMemory)) {
+        printf("Failed to create vertex buffer\n");
+        return 1;
+    }
 
     void *data;
-    vkMapMemory(*(pApp->pDevice), *(pApp->pVertexBufferMemory), 0, pBufferInfo->size, 0, &data);
-        memcpy(data, vertices, pBufferInfo->size);
-    vkUnmapMemory(*(pApp->pDevice), *(pApp->pVertexBufferMemory));
+    vkMapMemory(*(pApp->pDevice), *pStagingBufferMemory, 0, bufferSize, 0, &data);
+        memcpy(data, vertices, bufferSize);
+    vkUnmapMemory(*(pApp->pDevice), *pStagingBufferMemory);
+
+    if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &(pApp->pVertexBuffer), &(pApp->pVertexBufferMemory))) {
+        printf("Failed to create vertex buffer\n");
+        return 1;
+    }
+
+    copyBuffer(pApp, pStagingBuffer, pApp->pVertexBuffer, bufferSize);
+
+    vkDestroyBuffer(*(pApp->pDevice), *pStagingBuffer, NULL);
+    vkFreeMemory(*(pApp->pDevice), *pStagingBufferMemory, NULL);
 
     return 0;
 }
