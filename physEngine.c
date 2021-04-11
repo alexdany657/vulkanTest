@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 /* constants */
 
@@ -21,7 +22,12 @@ const uint32_t deviceExtensionsCount = 1;
 const char **deviceExtensions;
 
 struct Vertex *vertices = NULL;
-const int vertex_count = 3;
+const uint32_t vertex_count = 4;
+
+uint32_t *indices = NULL;
+const uint32_t index_count = 6;
+
+struct timespec *start;
 
 #ifdef NDEBUG
 const int8_t enableValidationLayers = 0;
@@ -38,6 +44,12 @@ void *SHUT_UP_GCC_PTR;
 struct Vertex {
     vec2 pos;
     vec3 color;
+};
+
+struct UniformBufferObject {
+    mat4 model;
+    mat4 view;
+    mat4 proj;
 };
 
 struct SwapChainSupportDetails {
@@ -72,6 +84,7 @@ struct HelloTriangleApp {
     VkExtent2D swapChainExtent;
     VkImageView *swapChainImageViews;
     VkRenderPass *pRenderPass;
+    VkDescriptorSetLayout *pDescriptorSetLayout;
     VkPipelineLayout *pPipelineLayout;
     VkPipeline *pGraphicsPipeline;
     VkFramebuffer *pSwapChainFramebuffers;
@@ -87,6 +100,13 @@ struct HelloTriangleApp {
 
     VkBuffer *pVertexBuffer;
     VkDeviceMemory *pVertexBufferMemory;
+    VkBuffer *pIndexBuffer;
+    VkDeviceMemory *pIndexBufferMemory;
+    VkBuffer *pUniformBuffers;
+    VkDeviceMemory *pUniformBuffersMemory;
+
+    VkDescriptorPool *pDescriptorPool;
+    VkDescriptorSet *pDescriptorSets;
 };
 
 /* declarations */
@@ -556,23 +576,43 @@ int initVertices() {
         return 1;
     }
 
-    (vertices+0)->pos[0] = 0.0f;
+    (vertices+0)->pos[0] = -0.5f;
     (vertices+0)->pos[1] = -0.5f;
     (vertices+0)->color[0] = 1.0f;
     (vertices+0)->color[1] = 0.0f;
     (vertices+0)->color[2] = 0.0f;
 
     (vertices+1)->pos[0] = 0.5f;
-    (vertices+1)->pos[1] = 0.5f;
+    (vertices+1)->pos[1] = -0.5f;
     (vertices+1)->color[0] = 0.0f;
     (vertices+1)->color[1] = 1.0f;
     (vertices+1)->color[2] = 0.0f;
 
-    (vertices+2)->pos[0] = -0.5f;
+    (vertices+2)->pos[0] = 0.5f;
     (vertices+2)->pos[1] = 0.5f;
     (vertices+2)->color[0] = 0.0f;
     (vertices+2)->color[1] = 0.0f;
     (vertices+2)->color[2] = 1.0f;
+
+    (vertices+3)->pos[0] = -0.5f;
+    (vertices+3)->pos[1] = 0.5f;
+    (vertices+3)->color[0] = 1.0f;
+    (vertices+3)->color[1] = 1.0f;
+    (vertices+3)->color[2] = 1.0f;
+
+    indices = malloc(sizeof(uint32_t) * index_count);
+    if (!indices) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    *(indices+0) = 0;
+    *(indices+1) = 1;
+    *(indices+2) = 2;
+
+    *(indices+3) = 2;
+    *(indices+4) = 3;
+    *(indices+5) = 0;
 
     return 0;
 }
@@ -636,6 +676,196 @@ uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags p
 /*--------------------------------------------------------*/
 /* End of helper functions                                */
 /*--------------------------------------------------------*/
+
+int updateUniformBuffer(void *_app, uint32_t currentImage) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    struct timespec *now = malloc(sizeof(struct timespec));
+    if (!now) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    clock_gettime(CLOCK_REALTIME, now);
+
+    float time = 1.0f * (now->tv_sec - start->tv_sec) + 1e-9f * (now->tv_nsec - start->tv_nsec);
+    struct UniformBufferObject *ubo = malloc(sizeof(struct UniformBufferObject));
+    if (!ubo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    glm_mat4_copy(GLM_MAT4_IDENTITY, ubo->model);
+    glm_rotate(ubo->model, time * glm_rad(90.0f), (vec3){0.0f, 0.0f, 1.0f});
+    glm_lookat((vec3){2.0f, 2.0f, 2.0f}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 0.0f, 1.0f}, ubo->view);
+    glm_perspective(glm_rad(45.0f), pApp->swapChainExtent.width / (float)pApp->swapChainExtent.height, 0.1f, 10.0f, ubo->proj);
+    ubo->proj[1][1] *= -1;
+
+    void *data;
+    vkMapMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + currentImage), 0, sizeof(struct UniformBufferObject), 0, &data);
+        memcpy(data, ubo, sizeof(struct UniformBufferObject));
+    vkUnmapMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + currentImage));
+
+    return 0;
+}
+
+int createDescriptorSets(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkDescriptorSetLayout *layouts = malloc(sizeof(VkDescriptorSetLayout) * pApp->swapChainImagesCount);
+    if (!layouts) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    for (size_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        memcpy(layouts+i, pApp->pDescriptorSetLayout, sizeof(VkDescriptorSetLayout));
+    }
+
+    VkDescriptorSetAllocateInfo *pAllocInfo = malloc(sizeof(VkDescriptorSetAllocateInfo));
+    if (!pAllocInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pAllocInfo, 0, sizeof(VkDescriptorSetAllocateInfo));
+
+    pAllocInfo->sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    pAllocInfo->descriptorPool = *(pApp->pDescriptorPool);
+    pAllocInfo->descriptorSetCount = pApp->swapChainImagesCount;
+    pAllocInfo->pSetLayouts = layouts;
+
+    pApp->pDescriptorSets = malloc(sizeof(VkDescriptorSet) * pApp->swapChainImagesCount);
+    if (!pApp->pDescriptorSets) {
+        printf("OOM: dropping\n");
+    }
+
+    if (vkAllocateDescriptorSets(*(pApp->pDevice), pAllocInfo, pApp->pDescriptorSets) != VK_SUCCESS) {
+        printf("Failed to allocate descriptor sets\n");
+        return 1;
+    }
+
+    for (size_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        VkDescriptorBufferInfo *pBufferInfo = malloc(sizeof(VkDescriptorBufferInfo));
+        if (!pBufferInfo) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        memset(pBufferInfo, 0, sizeof(VkDescriptorBufferInfo));
+        
+        pBufferInfo->buffer = *(pApp->pUniformBuffers + i);
+        pBufferInfo->offset = 0;
+        pBufferInfo->range = sizeof(struct UniformBufferObject);
+
+        VkWriteDescriptorSet *pDescriptorWrite = malloc(sizeof(VkWriteDescriptorSet));
+        if (!pDescriptorWrite) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
+        memset(pDescriptorWrite, 0, sizeof(VkWriteDescriptorSet));
+
+        pDescriptorWrite->sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        pDescriptorWrite->dstSet = *(pApp->pDescriptorSets + i);
+        pDescriptorWrite->dstBinding = 0;
+        pDescriptorWrite->dstArrayElement = 0;
+        pDescriptorWrite->descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        pDescriptorWrite->descriptorCount = 1;
+
+        pDescriptorWrite->pBufferInfo = pBufferInfo;
+        pDescriptorWrite->pImageInfo = NULL;
+        pDescriptorWrite->pTexelBufferView = NULL;
+
+        vkUpdateDescriptorSets(*(pApp->pDevice), 1, pDescriptorWrite, 0, NULL);
+
+        free(pDescriptorWrite);
+        free(pBufferInfo);
+    }
+
+    free(layouts);
+    free(pAllocInfo);
+
+    return 0;
+}
+
+int createDescriptorPool(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkDescriptorPoolSize *pPoolSize = malloc(sizeof(VkDescriptorPoolSize));
+    if (!pPoolSize) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pPoolSize, 0, sizeof(VkDescriptorPoolSize));
+
+    pPoolSize->type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pPoolSize->descriptorCount = pApp->swapChainImagesCount;
+
+    VkDescriptorPoolCreateInfo *pPoolInfo = malloc(sizeof(VkDescriptorPoolCreateInfo));
+    if (!pPoolInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pPoolInfo, 0, sizeof(VkDescriptorPoolCreateInfo));
+
+    pPoolInfo->sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pPoolInfo->poolSizeCount = 1;
+    pPoolInfo->pPoolSizes = pPoolSize;
+    pPoolInfo->maxSets = pApp->swapChainImagesCount;
+
+    pApp->pDescriptorPool = malloc(sizeof(VkDescriptorPool));
+    if (!pApp->pDescriptorPool) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    if (vkCreateDescriptorPool(*(pApp->pDevice), pPoolInfo, NULL, pApp->pDescriptorPool) != VK_SUCCESS) {
+        printf("Failed to create descriptor pool\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+int createDescriptorSetLayout(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkDescriptorSetLayoutBinding *pUboLayoutBinding = malloc(sizeof(VkDescriptorSetLayoutBinding));
+    if (!pUboLayoutBinding) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pUboLayoutBinding, 0, sizeof(VkDescriptorSetLayoutBinding));
+
+    pUboLayoutBinding->binding = 0;
+    pUboLayoutBinding->descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pUboLayoutBinding->descriptorCount = 1;
+
+    pUboLayoutBinding->stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    pUboLayoutBinding->pImmutableSamplers = NULL;
+
+    VkDescriptorSetLayoutCreateInfo *pLayoutInfo = malloc(sizeof(VkDescriptorSetLayoutCreateInfo));
+    if (!pLayoutInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pLayoutInfo, 0, sizeof(VkDescriptorSetLayoutCreateInfo));
+
+    pLayoutInfo->sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    pLayoutInfo->bindingCount = 1;
+    pLayoutInfo->pBindings = pUboLayoutBinding;
+
+    pApp->pDescriptorSetLayout = malloc(sizeof(VkDescriptorSetLayout));
+    if (!pApp->pDescriptorSetLayout) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    if (vkCreateDescriptorSetLayout(*(pApp->pDevice), pLayoutInfo, NULL, pApp->pDescriptorSetLayout) != VK_SUCCESS) {
+        printf("Failed to create descriptor set layout\n");
+        return 1;
+    }
+
+    return 0;
+}
 
 int copyBuffer(void *_app, VkBuffer *pSrcBuffer, VkBuffer *pDstBuffer, VkDeviceSize size) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
@@ -711,7 +941,7 @@ int copyBuffer(void *_app, VkBuffer *pSrcBuffer, VkBuffer *pDstBuffer, VkDeviceS
     return 0;
 }
 
-int createBuffer(void *_app, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer **ppBuffer, VkDeviceMemory **ppBufferMemory) {
+int createBuffer(void *_app, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer **ppBuffer, VkDeviceMemory **ppBufferMemory, char fl) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     VkBufferCreateInfo *pBufferInfo = malloc(sizeof(VkBufferCreateInfo));
@@ -727,10 +957,12 @@ int createBuffer(void *_app, VkDeviceSize size, VkBufferUsageFlags usage, VkMemo
     pBufferInfo->usage = usage;
     pBufferInfo->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    *ppBuffer = malloc(sizeof(VkBuffer));
-    if (!(*ppBuffer)) {
-        printf("OOM: dropping\n");
-        return 1;
+    if (fl) {
+        *ppBuffer = malloc(sizeof(VkBuffer));
+        if (!(*ppBuffer)) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
     }
 
     if (vkCreateBuffer(*(pApp->pDevice), pBufferInfo, NULL, *ppBuffer) != VK_SUCCESS) {
@@ -758,10 +990,12 @@ int createBuffer(void *_app, VkDeviceSize size, VkBufferUsageFlags usage, VkMemo
     pAllocInfo->allocationSize = pMemRequirements->size;
     pAllocInfo->memoryTypeIndex = findMemoryType(pApp, pMemRequirements->memoryTypeBits, properties);
 
-    *ppBufferMemory = malloc(sizeof(VkDeviceMemory));
-    if (!(*ppBufferMemory)) {
-        printf("OOM: dropping\n");
-        return 1;
+    if (fl) {
+        *ppBufferMemory = malloc(sizeof(VkDeviceMemory));
+        if (!(*ppBufferMemory)) {
+            printf("OOM: dropping\n");
+            return 1;
+        }
     }
 
     if (vkAllocateMemory(*(pApp->pDevice), pAllocInfo, NULL, *ppBufferMemory) != VK_SUCCESS) {
@@ -778,6 +1012,70 @@ int createBuffer(void *_app, VkDeviceSize size, VkBufferUsageFlags usage, VkMemo
     return 0;
 }
 
+int createUniformBuffers(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkDeviceSize bufferSize = sizeof(struct UniformBufferObject);
+
+    pApp->pUniformBuffers = malloc(sizeof(VkBuffer) * pApp->swapChainImagesCount);
+    pApp->pUniformBuffersMemory = malloc(sizeof(VkDeviceMemory) * pApp->swapChainImagesCount);
+    if (!pApp->pUniformBuffers || !pApp->pUniformBuffersMemory) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    for (size_t i = 0; i < pApp->swapChainImagesCount; ++i) {
+        VkBuffer *pBuffer;
+        VkDeviceMemory *pBufferMemory;
+        
+        pBuffer = pApp->pUniformBuffers+i;
+        pBufferMemory = pApp->pUniformBuffersMemory+i;
+        if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &pBuffer, &pBufferMemory, 0)) {
+            printf("Failed to create uniform buffer\n");
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int createIndexBuffer(void *_app) {
+    struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+
+    VkBuffer *pStagingBuffer = NULL;
+    VkDeviceMemory *pStagingBufferMemory = NULL;
+
+    VkDeviceSize bufferSize = sizeof(uint32_t) * index_count;
+
+    if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &pStagingBuffer, &pStagingBufferMemory, 1)) {
+        printf("Failed to create index buffer\n");
+        return 1;
+    }
+
+    void *data;
+    vkMapMemory(*(pApp->pDevice), *pStagingBufferMemory, 0, bufferSize, 0, &data);
+        memcpy(data, indices, bufferSize);
+    vkUnmapMemory(*(pApp->pDevice), *pStagingBufferMemory);
+
+    if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &(pApp->pIndexBuffer), &(pApp->pIndexBufferMemory), 1)) {
+        printf("Failed to create index buffer\n");
+        return 1;
+    }
+
+    copyBuffer(pApp, pStagingBuffer, pApp->pIndexBuffer, bufferSize);
+
+    vkDestroyBuffer(*(pApp->pDevice), *pStagingBuffer, NULL);
+    vkFreeMemory(*(pApp->pDevice), *pStagingBufferMemory, NULL);
+
+    return 0;
+}
+
 int createVertexBuffer(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -788,7 +1086,7 @@ int createVertexBuffer(void *_app) {
 
     if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &pStagingBuffer, &pStagingBufferMemory)) {
+            &pStagingBuffer, &pStagingBufferMemory, 1)) {
         printf("Failed to create vertex buffer\n");
         return 1;
     }
@@ -800,7 +1098,7 @@ int createVertexBuffer(void *_app) {
 
     if (createBuffer(pApp, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &(pApp->pVertexBuffer), &(pApp->pVertexBufferMemory))) {
+            &(pApp->pVertexBuffer), &(pApp->pVertexBufferMemory), 1)) {
         printf("Failed to create vertex buffer\n");
         return 1;
     }
@@ -818,7 +1116,11 @@ int cleanupSwapChain(void *_app) {
 
     for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
         vkDestroyFramebuffer(*(pApp->pDevice), *(pApp->pSwapChainFramebuffers + i), NULL);
+        vkDestroyBuffer(*(pApp->pDevice), *(pApp->pUniformBuffers + i), NULL);
+        vkFreeMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + i), NULL);
     }
+
+    vkDestroyDescriptorPool(*(pApp->pDevice), *(pApp->pDescriptorPool), NULL);
 
     vkFreeCommandBuffers(*(pApp->pDevice), *(pApp->pCommandPool), pApp->swapChainImagesCount, pApp->commandBuffers);
 
@@ -858,6 +1160,8 @@ int drawFrame(void *_app) {
         vkWaitForFences(*(pApp->pDevice), 1, *(pApp->ppImagesInFlight + imageIndex), VK_TRUE, UINT64_MAX);
     }
     *(pApp->ppImagesInFlight + imageIndex) = pApp->pInFlightFences + pApp->currentFrame;
+
+    updateUniformBuffer(pApp, imageIndex);
 
     VkSubmitInfo *pSubmitInfo = malloc(sizeof(VkSubmitInfo));
     if (!pSubmitInfo) {
@@ -1048,7 +1352,9 @@ int createCommandBuffers(void *_app) {
             VkBuffer vertexBuffers[] = {*(pApp->pVertexBuffer)};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(pApp->commandBuffers[i], 0, 1, vertexBuffers, offsets);
-            vkCmdDraw(pApp->commandBuffers[i], vertex_count, 1, 0, 0);
+            vkCmdBindIndexBuffer(pApp->commandBuffers[i], *(pApp->pIndexBuffer), 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindDescriptorSets(pApp->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, *(pApp->pPipelineLayout), 0, 1, pApp->pDescriptorSets + i, 0, NULL);
+            vkCmdDrawIndexed(pApp->commandBuffers[i], index_count, 1, 0, 0, 0);
         vkCmdEndRenderPass(pApp->commandBuffers[i]);
 
         if (vkEndCommandBuffer(pApp->commandBuffers[i]) != VK_SUCCESS) {
@@ -1250,7 +1556,7 @@ int createGraphicsPipeline(void *_app) {
     pRasterizer->polygonMode = VK_POLYGON_MODE_FILL;
     pRasterizer->lineWidth = 1.0f;
     pRasterizer->cullMode = VK_CULL_MODE_BACK_BIT;
-    pRasterizer->frontFace = VK_FRONT_FACE_CLOCKWISE;
+    pRasterizer->frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     pRasterizer->depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo *pMultisampling = malloc(sizeof(VkPipelineMultisampleStateCreateInfo));
@@ -1311,6 +1617,8 @@ int createGraphicsPipeline(void *_app) {
     }
     memset(pPipelineLayoutInfo, 0, sizeof(VkPipelineLayoutCreateInfo));
     pPipelineLayoutInfo->sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pPipelineLayoutInfo->setLayoutCount = 1;
+    pPipelineLayoutInfo->pSetLayouts = pApp->pDescriptorSetLayout;
 
     if (vkCreatePipelineLayout(*(pApp->pDevice), pPipelineLayoutInfo, NULL, pApp->pPipelineLayout) != VK_SUCCESS) {
         printf("Failed to create pipeline layout\n");
@@ -1882,6 +2190,11 @@ int initVulkan(void *_app) {
         return 1;
     }
 
+    if (createDescriptorSetLayout(pApp)) {
+        printf("Failed to create descriptor set layout\n");
+        return 1;
+    }
+
     if (createGraphicsPipeline(pApp)) {
         printf("Failed to create graphics pipeline\n");
         return 1;
@@ -1899,6 +2212,26 @@ int initVulkan(void *_app) {
 
     if (createVertexBuffer(pApp)) {
         printf("Failed to create vertex buffer\n");
+        return 1;
+    }
+
+    if (createIndexBuffer(pApp)) {
+        printf("Failed to create index buffer\n");
+        return 1;
+    }
+
+    if (createUniformBuffers(pApp)) {
+        printf("Failed to create uniform buffers\n");
+        return 1;
+    }
+
+    if (createDescriptorPool(pApp)) {
+        printf("Failed to create descriptor pool\n");
+        return 1;
+    }
+
+    if (createDescriptorSets(pApp)) {
+        printf("Failed to create descriptor sets\n");
         return 1;
     }
 
@@ -1935,8 +2268,13 @@ int cleanup(void *_app) {
         return 1;
     }
 
+    vkDestroyDescriptorSetLayout(*(pApp->pDevice), *(pApp->pDescriptorSetLayout), NULL);
+
     vkDestroyBuffer(*(pApp->pDevice), *(pApp->pVertexBuffer), NULL);
     vkFreeMemory(*(pApp->pDevice), *(pApp->pVertexBufferMemory), NULL);
+
+    vkDestroyBuffer(*(pApp->pDevice), *(pApp->pIndexBuffer), NULL);
+    vkFreeMemory(*(pApp->pDevice), *(pApp->pIndexBufferMemory), NULL);
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         vkDestroyFence(*(pApp->pDevice), *(pApp->pInFlightFences + i), NULL);
@@ -2005,6 +2343,13 @@ int init() {
         return 1;
     }
 
+    start = malloc(sizeof(struct timespec));
+    if (!start) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    clock_gettime(CLOCK_REALTIME, start);
+
     return 0;
 }
 
@@ -2041,6 +2386,18 @@ int recreateSwapChain(void *_app) {
     }
 
     if (createFramebuffers(pApp)) {
+        return 1;
+    }
+
+    if (createUniformBuffers(pApp)) {
+        return 1;
+    }
+
+    if (createDescriptorPool(pApp)) {
+        return 1;
+    }
+
+    if (createDescriptorSets(pApp)) {
         return 1;
     }
 
