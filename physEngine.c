@@ -27,7 +27,7 @@ const uint32_t vertex_count = 4;
 uint32_t *indices = NULL;
 const uint32_t index_count = 6;
 
-struct timespec *start;
+struct timespec *start, *now;
 
 #ifdef NDEBUG
 const int8_t enableValidationLayers = 0;
@@ -73,6 +73,7 @@ struct HelloTriangleApp {
     VkInstance *pInstance;
     VkDebugUtilsMessengerEXT *pDebugMessenger;
     VkPhysicalDevice *pPhysicalDevice;
+    VkPhysicalDevice *pDevices;
     VkDevice *pDevice;
     VkQueue *pGraphicsQueue;
     VkQueue *pPresentQueue;
@@ -94,6 +95,7 @@ struct HelloTriangleApp {
     VkSemaphore *pRenderFinishedSemaphores;
     VkFence *pInFlightFences;
     VkFence **ppImagesInFlight;
+    VkFence *pFenceHandle;
     uint32_t currentFrame;
 
     int framebufferResized;
@@ -108,6 +110,9 @@ struct HelloTriangleApp {
     VkDescriptorPool *pDescriptorPool;
     VkDescriptorSet *pDescriptorSets;
 };
+
+/* more consts (FIXME: organize better) */
+struct UniformBufferObject *ubo;
 
 /* declarations */
 
@@ -617,6 +622,23 @@ int initVertices() {
     return 0;
 }
 
+int initTime() {
+    start = malloc(sizeof(struct timespec));
+    if (!start) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    clock_gettime(CLOCK_REALTIME, start);
+
+    now = malloc(sizeof(struct timespec));
+    if (!now) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+
+    return 0;
+}
+
 static VkVertexInputBindingDescription *getBindingDescription() {
     VkVertexInputBindingDescription *pBindingDescription = malloc(sizeof(VkVertexInputBindingDescription));
 
@@ -655,7 +677,9 @@ static VkVertexInputAttributeDescription *getAttributeDescriptions() {
 
 uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
+    uint32_t ans;
 
+    ans = UINT32_MAX;
     VkPhysicalDeviceMemoryProperties *pMemProperties = malloc(sizeof(VkPhysicalDeviceMemoryProperties));
     if (!pMemProperties) {
         printf("OOM: dropping\n");
@@ -666,11 +690,14 @@ uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags p
 
     for (uint32_t i = 0; i < pMemProperties->memoryTypeCount; ++i) {
         if ((typeFilter & (1 << i)) && ((pMemProperties->memoryTypes + i)->propertyFlags & properties) == properties) {
-            return i;
+            ans = i;
+            break;
         }
     }
 
-    return UINT32_MAX;
+    free(pMemProperties);
+
+    return ans;
 }
 
 /*--------------------------------------------------------*/
@@ -680,20 +707,9 @@ uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags p
 int updateUniformBuffer(void *_app, uint32_t currentImage) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
-    struct timespec *now = malloc(sizeof(struct timespec));
-    if (!now) {
-        printf("OOM: dropping\n");
-        return 1;
-    }
-
     clock_gettime(CLOCK_REALTIME, now);
 
     float time = 1.0f * (now->tv_sec - start->tv_sec) + 1e-9f * (now->tv_nsec - start->tv_nsec);
-    struct UniformBufferObject *ubo = malloc(sizeof(struct UniformBufferObject));
-    if (!ubo) {
-        printf("OOM: dropping\n");
-        return 1;
-    }
 
     glm_mat4_copy(GLM_MAT4_IDENTITY, ubo->model);
     glm_rotate(ubo->model, time * glm_rad(90.0f), (vec3){0.0f, 0.0f, 1.0f});
@@ -821,6 +837,9 @@ int createDescriptorPool(void *_app) {
         return 1;
     }
 
+    free(pPoolInfo);
+    free(pPoolSize);
+
     return 0;
 }
 
@@ -863,6 +882,9 @@ int createDescriptorSetLayout(void *_app) {
         printf("Failed to create descriptor set layout\n");
         return 1;
     }
+
+    free(pLayoutInfo);
+    free(pUboLayoutBinding);
 
     return 0;
 }
@@ -1254,6 +1276,7 @@ int createSyncObjects(void *_app) {
 
     VkFence *pFenceHandle = malloc(sizeof(VkFence));
     *pFenceHandle = VK_NULL_HANDLE;
+    pApp->pFenceHandle = pFenceHandle;
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (vkCreateSemaphore(*(pApp->pDevice), pSemaphoreInfo, NULL, pApp->pImageAvailableSemaphores + i) != VK_SUCCESS ||
@@ -1659,6 +1682,10 @@ int createGraphicsPipeline(void *_app) {
     vkDestroyShaderModule(*(pApp->pDevice), *vertShaderModule, NULL);
     vkDestroyShaderModule(*(pApp->pDevice), *fragShaderModule, NULL);
     
+    free((void *)pVertexInputInfo->pVertexBindingDescriptions);
+    free((void *)pVertexInputInfo->pVertexAttributeDescriptions);
+
+    free(pPipelineInfo);
     free(pShaderStages);
     free(pVertexInputInfo);
     free(pInputAssembly);
@@ -1671,6 +1698,8 @@ int createGraphicsPipeline(void *_app) {
     free(pColorBlending);
     free(pDynamicState);
     free(pPipelineLayoutInfo);
+    free(vertShaderModule);
+    free(fragShaderModule);
 
     free(vertShaderCode);
     free(fragShaderCode);
@@ -1771,14 +1800,14 @@ int createImageViews(void *_app) {
         return 1;
     }
 
-    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
-        VkImageViewCreateInfo *pCreateInfo = malloc(sizeof(VkImageViewCreateInfo));
-        if (!pCreateInfo) {
-            printf("OOM: dropping\n");
-            return 1;
-        }
-        memset(pCreateInfo, 0, sizeof(VkImageViewCreateInfo));
 
+    VkImageViewCreateInfo *pCreateInfo = malloc(sizeof(VkImageViewCreateInfo));
+    if (!pCreateInfo) {
+        printf("OOM: dropping\n");
+        return 1;
+    }
+    memset(pCreateInfo, 0, sizeof(VkImageViewCreateInfo));
+    for (uint32_t i = 0; i < pApp->swapChainImagesCount; ++i) {
         pCreateInfo->sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         pCreateInfo->image = *(pApp->swapChainImages + i);
         pCreateInfo->viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -1802,6 +1831,7 @@ int createImageViews(void *_app) {
             return 1;
         }
     }
+    free(pCreateInfo);
 
     return 0;
 }
@@ -1896,6 +1926,10 @@ int createSwapChain(void *_app) {
 
     pApp->pSwapChainFormat = &(pSurfaceFormat->format);
     pApp->swapChainExtent = extent;
+
+    freeSwapChainSupportDetails(pSwapChainSupport);
+    free(pCreateInfo);
+    free(pIndices);
 
     return 0;
 }
@@ -2007,6 +2041,11 @@ int createLogicalDevice(void *_app) {
     vkGetDeviceQueue(*(pApp->pDevice), pIndices->graphicsFamily, 0, pApp->pGraphicsQueue);
     vkGetDeviceQueue(*(pApp->pDevice), pIndices->presentFamily, 0, pApp->pPresentQueue);
 
+    free(pCreateInfo);
+    free(pDeviceFeatures);
+    free(pQueueCreateInfos);
+    free(pIndices);
+
     return 0;
 }
 
@@ -2028,16 +2067,16 @@ int pickPhysicalDevice(void *_app) {
         return 1;
     }
     
-    VkPhysicalDevice *devices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
-    if (!devices) {
+    pApp->pDevices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
+    if (!pApp->pDevices) {
         printf("OOM: dropping\n");
         return 1;
     }
-    vkEnumeratePhysicalDevices(*(pApp->pInstance), &deviceCount, devices);
+    vkEnumeratePhysicalDevices(*(pApp->pInstance), &deviceCount, pApp->pDevices);
 
     for (uint32_t i = 0; i < deviceCount; ++i) {
-        if (isDeviceSuitable(pApp, devices + i)) {
-            pApp->pPhysicalDevice = devices + i;
+        if (isDeviceSuitable(pApp, pApp->pDevices + i)) {
+            pApp->pPhysicalDevice = pApp->pDevices + i;
             break;
         }
     }
@@ -2107,6 +2146,9 @@ int createInstance(void *_app) {
         return 1;
     }
 
+    free(pAppInfo);
+    free(pCreateInfo);
+
     /* garbage: for fun */
 
 #ifndef NDEBUG
@@ -2143,6 +2185,7 @@ int initWindow(void *_app) {
     pApp->pWindow = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", NULL, NULL);
     glfwSetWindowUserPointer(pApp->pWindow, pApp);
     glfwSetFramebufferSizeCallback(pApp->pWindow, framebufferResizeCallback);
+    pApp->framebufferResized = 0;
 
     return 0;
 }
@@ -2288,6 +2331,7 @@ int cleanup(void *_app) {
 
     if (enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(pApp->pInstance, pApp->pDebugMessenger, NULL);
+        free(pApp->pDebugMessenger);
     }
 
     vkDestroySurfaceKHR(*(pApp->pInstance), *(pApp->pSurface), NULL);
@@ -2295,6 +2339,33 @@ int cleanup(void *_app) {
 
     glfwDestroyWindow(pApp->pWindow);
     glfwTerminate();
+
+    free(pApp->swapChainImages);
+    free(pApp->pSwapChainFramebuffers);
+    free(pApp->pDescriptorSets);
+    free(pApp->commandBuffers);
+    free(pApp->swapChainImageViews);
+    free(pApp->pDevice);
+    free(pApp->pFenceHandle);
+    free(pApp->pDescriptorPool);
+    free(pApp->pUniformBuffers);
+    free(pApp->pUniformBuffersMemory);
+    free(pApp->pIndexBuffer);
+    free(pApp->pIndexBufferMemory);
+    free(pApp->pVertexBuffer);
+    free(pApp->pVertexBufferMemory);
+    free(pApp->pGraphicsPipeline);
+    free(pApp->pRenderPass);
+    free(pApp->pSwapChain);
+    free(pApp->pPhysicalDevice);
+    free(pApp->pSurface);
+    free(pApp->pInstance);
+
+    free(pApp->pImageAvailableSemaphores);
+    free(pApp->pRenderFinishedSemaphores);
+    free(pApp->pInFlightFences);
+    free(pApp->ppImagesInFlight);
+    /*free(pApp->pWindow);*/
 
     return 0;
 }
@@ -2343,12 +2414,31 @@ int init() {
         return 1;
     }
 
-    start = malloc(sizeof(struct timespec));
-    if (!start) {
+    if (initTime()) {
+        printf("Failed to init time vars\n");
+        return 1;
+    }
+
+    ubo = malloc(sizeof(struct UniformBufferObject));
+    if (!ubo) {
         printf("OOM: dropping\n");
         return 1;
     }
-    clock_gettime(CLOCK_REALTIME, start);
+
+    return 0;
+}
+
+int clear() {
+    free(deviceExtensions);
+    free(validationLayers);
+
+    free(vertices);
+    free(indices);
+
+    free(start);
+    free(now);
+
+    free(ubo);
 
     return 0;
 }
@@ -2368,6 +2458,18 @@ int recreateSwapChain(void *_app) {
     if (cleanupSwapChain(pApp)) {
         return 1;
     }
+
+    free(pApp->pSwapChain);
+    free(pApp->pRenderPass);
+    free(pApp->pGraphicsPipeline);
+    free(pApp->pUniformBuffers);
+    free(pApp->pUniformBuffersMemory);
+    free(pApp->pDescriptorPool);
+    free(pApp->swapChainImageViews);
+    free(pApp->commandBuffers);
+    free(pApp->pDescriptorSets);
+    free(pApp->pSwapChainFramebuffers);
+    free(pApp->swapChainImages);
 
     if (createSwapChain(pApp)) {
         return 1;
@@ -2426,6 +2528,13 @@ int main() {
         printf("Failed to run app\n");
         return 1;
     }
+
+    if (clear()) {
+        printf("Failed to clear\n");
+        return 1;
+    }
+
+    free(pApp);
 
     return 0;
 }
