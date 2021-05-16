@@ -11,7 +11,7 @@
 /* constants */
 
 const int WIDTH = 800;
-const int HEIGHT = 600;
+const int HEIGHT = 800;
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -576,26 +576,26 @@ int initVertices() {
         return 1;
     }
 
-    (vertices+0)->pos[0] = -0.5f;
-    (vertices+0)->pos[1] = -0.5f;
+    (vertices+0)->pos[0] = -0.5f * 2;
+    (vertices+0)->pos[1] = -0.5f * 2;
     (vertices+0)->color[0] = 1.0f;
     (vertices+0)->color[1] = 0.0f;
     (vertices+0)->color[2] = 0.0f;
 
-    (vertices+1)->pos[0] = 0.5f;
-    (vertices+1)->pos[1] = -0.5f;
+    (vertices+1)->pos[0] = 0.5f * 2;
+    (vertices+1)->pos[1] = -0.5f * 2;
     (vertices+1)->color[0] = 0.0f;
     (vertices+1)->color[1] = 1.0f;
     (vertices+1)->color[2] = 0.0f;
 
-    (vertices+2)->pos[0] = 0.5f;
-    (vertices+2)->pos[1] = 0.5f;
+    (vertices+2)->pos[0] = 0.5f * 2;
+    (vertices+2)->pos[1] = 0.5f * 2;
     (vertices+2)->color[0] = 0.0f;
     (vertices+2)->color[1] = 0.0f;
     (vertices+2)->color[2] = 1.0f;
 
-    (vertices+3)->pos[0] = -0.5f;
-    (vertices+3)->pos[1] = 0.5f;
+    (vertices+3)->pos[0] = -0.5f * 2;
+    (vertices+3)->pos[1] = 0.5f * 2;
     (vertices+3)->color[0] = 1.0f;
     (vertices+3)->color[1] = 1.0f;
     (vertices+3)->color[2] = 1.0f;
@@ -695,9 +695,12 @@ int updateUniformBuffer(void *_app, uint32_t currentImage) {
         return 1;
     }
 
+    mat4 tmp;
+
     glm_mat4_copy(GLM_MAT4_IDENTITY, ubo->model);
     glm_rotate(ubo->model, time * glm_rad(90.0f), (vec3){0.0f, 0.0f, 1.0f});
-    glm_lookat((vec3){2.0f, 2.0f, 2.0f}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 0.0f, 1.0f}, ubo->view);
+    glm_lookat((vec3){2.0 * sin(time * glm_rad(90.0f)), 1.0f, 2.0 * cos(time * glm_rad(90.0f))}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 1.0f, 0.0f}, tmp);
+    glm_mat4_inv(tmp, ubo->view);
     glm_perspective(glm_rad(45.0f), pApp->swapChainExtent.width / (float)pApp->swapChainExtent.height, 0.1f, 10.0f, ubo->proj);
     ubo->proj[1][1] *= -1;
 
@@ -705,6 +708,9 @@ int updateUniformBuffer(void *_app, uint32_t currentImage) {
     vkMapMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + currentImage), 0, sizeof(struct UniformBufferObject), 0, &data);
         memcpy(data, ubo, sizeof(struct UniformBufferObject));
     vkUnmapMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + currentImage));
+
+    free(ubo);
+    free(now);
 
     return 0;
 }
@@ -838,7 +844,7 @@ int createDescriptorSetLayout(void *_app) {
     pUboLayoutBinding->descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pUboLayoutBinding->descriptorCount = 1;
 
-    pUboLayoutBinding->stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pUboLayoutBinding->stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     pUboLayoutBinding->pImmutableSamplers = NULL;
 
@@ -2138,7 +2144,7 @@ int initWindow(void *_app) {
 
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     pApp->pWindow = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", NULL, NULL);
     glfwSetWindowUserPointer(pApp->pWindow, pApp);
