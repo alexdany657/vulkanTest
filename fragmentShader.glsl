@@ -1,8 +1,9 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-#define SAMPLES             256
+#define SAMPLES             512
 #define LIGHT_SAMPLES       64
+#define EPS                 0.0001
 
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
@@ -17,8 +18,20 @@ float sphereSDF(const in vec3 point, const in vec3 center, const in float radius
     return sign(length(point - center) - radius);
 }
 
+float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
+    if (abs(point.x - center.x) < side*0.5 && abs(point.y - center.y) < side*0.5 && abs(point.z - center.z) < side*0.5) {
+        return -1.0;
+    }
+    if (abs(point.x - center.x) == side*0.5 && abs(point.y - center.y) == side*0.5 && abs(point.z - center.z) == side*0.5) {
+        return 0.0;
+    }
+    if (abs(point.x - center.x) > side*0.5 && abs(point.y - center.y) > side*0.5 && abs(point.z - center.z) > side*0.5) {
+        return 1.0;
+    }
+}
+
 void main() {
-    mat4 uVirtualCameraModelMatrix = ubo.view;
+    mat4 uVirtualCameraModelMatrix = ubo.view; 
     vec3 v_ray = vec3(fragColor.xy * 0.5, fragColor.z);
 
     /*
@@ -34,7 +47,7 @@ void main() {
     vec3 lightColor1 = vec3(0.0, 1.0, 0.0);
     vec3 lightColor2 = vec3(1.0, 0.0, 0.0);
 
-    float radius1 = 0.1;
+    float radius1 = 0.2;
     vec3 center1 = vec3(0.0,0.0,0.0);
     vec3 color1 = vec3(0.2, 0.0, 0.2);
 
@@ -42,12 +55,12 @@ void main() {
     vec3 center2 = vec3(0.5, 0.0, 0.0);
     vec3 color2 = vec3(0.0, 0.2, 0.2);
 
-    vec3 dirLight1 = normalize(vec3(0.1, 0.2, 0.3));
+    vec3 dirLight1 = normalize(vec3(0.1, -0.2, 0.3));
     vec3 dirLight2 = normalize(vec3(0.1, 0.0, 0.0));
 
     vec3 currentPoint = origin.xyz;
 
-    float sphereTest1 = sphereSDF(currentPoint, center1, radius1);
+    float sphereTest1 = cubeSDF(currentPoint, center1, radius1);
     float sphereTest2 = sphereSDF(currentPoint, center2, radius2);
 
     outColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -56,7 +69,7 @@ void main() {
 
         currentPoint += delta * ray.xyz;
 
-        float currentTest1 = sphereSDF(currentPoint, center1, radius1);
+        float currentTest1 = cubeSDF(currentPoint, center1, radius1);
         float currentTest2 = sphereSDF(currentPoint, center2, radius2);
 
         if (sphereTest1 != currentTest1) {
@@ -64,8 +77,27 @@ void main() {
             delta *= -0.5;
             sphereTest1 = currentTest1;
 
-            if (length(delta) < 0.0001) {
-                vec3 norm = normalize(currentPoint - center1);
+            if (length(delta) < EPS) {
+                vec3 norm = vec3(0.0, 0.0, 0.0);
+                if (length(currentPoint.z - center1.z - radius1*0.5) < 5.0*EPS) {
+                    norm.z += 1.0;
+                }
+                if (length(currentPoint.z - center1.z + radius1*0.5) < 5.0*EPS) {
+                    norm.z -= 1.0;
+                }
+                if (length(currentPoint.y - center1.y - radius1*0.5) < 5.0*EPS) {
+                    norm.y += 1.0;
+                }
+                if (length(currentPoint.y - center1.y + radius1*0.5) < 5.0*EPS) {
+                    norm.y -= 1.0;
+                }
+                if (length(currentPoint.x - center1.x - radius1*0.5) < 5.0*EPS) {
+                    norm.x += 1.0;
+                }
+                if (length(currentPoint.x - center1.x + radius1*0.5) < 5.0*EPS) {
+                    norm.x -= 1.0;
+                }
+                norm = normalize(norm);
 
                 vec3 cp = currentPoint;
 
@@ -132,13 +164,13 @@ void main() {
 
                 currentPoint = cp;
                 delta = maxDist / LIGHT_SAMPLES;
-                sphereTest1 = sphereSDF(currentPoint, center1, radius1);
+                sphereTest1 = cubeSDF(currentPoint, center1, radius1);
 
                 for (float j = 0.0; j < LIGHT_SAMPLES; j += 1.0) {
 
                     currentPoint -= delta * dirLight2;
 
-                    float currentTest1 = sphereSDF(currentPoint, center1, radius1);
+                    float currentTest1 = cubeSDF(currentPoint, center1, radius1);
 
                     if (sphereTest1 != currentTest1) {
 
@@ -151,13 +183,13 @@ void main() {
 
                 currentPoint = cp;
                 delta = maxDist / LIGHT_SAMPLES;
-                sphereTest1 = sphereSDF(currentPoint, center1, radius1);
+                sphereTest1 = cubeSDF(currentPoint, center1, radius1);
 
                 for (float j = 0.0; j < LIGHT_SAMPLES; j += 1.0) {
 
                     currentPoint -= delta * dirLight1;
 
-                    float currentTest1 = sphereSDF(currentPoint, center1, radius1);
+                    float currentTest1 = cubeSDF(currentPoint, center1, radius1);
 
                     if (sphereTest1 != currentTest1) {
 
