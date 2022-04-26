@@ -1,7 +1,7 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-#define SAMPLES             512
+#define SAMPLES             2048
 #define LIGHT_SAMPLES       64
 #define EPS                 0.0001
 
