@@ -2303,6 +2303,7 @@ int run(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
     pApp->currentFrame = 0;
+    pApp->framebufferResized = 0;
 
     if (initWindow(pApp)) {
         printf("Failed to initialize window\n");
