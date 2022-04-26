@@ -1659,6 +1659,8 @@ int createGraphicsPipeline(void *_app) {
     vkDestroyShaderModule(*(pApp->pDevice), *vertShaderModule, NULL);
     vkDestroyShaderModule(*(pApp->pDevice), *fragShaderModule, NULL);
     
+    free(vertShaderModule);
+    free(fragShaderModule);
     free(pShaderStages);
     free(pVertexInputInfo);
     free(pInputAssembly);
@@ -2296,6 +2298,8 @@ int cleanup(void *_app) {
     glfwDestroyWindow(pApp->pWindow);
     glfwTerminate();
 
+    free(pApp->pPhysicalDevice);
+
     return 0;
 }
 
@@ -2427,6 +2431,8 @@ int main() {
         printf("Failed to run app\n");
         return 1;
     }
+
+    free(pApp);
 
     return 0;
 }
