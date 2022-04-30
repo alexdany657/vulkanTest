@@ -129,6 +129,7 @@ void freeSwapChainSupportDetails(void *_pDetails) {
     free(pDetails);
 }
 
+/* TODO: adding frees stopped here */
 int initDeviceExtensions() {
     deviceExtensions = malloc(sizeof(char *) * deviceExtensionsCount);
     if (!deviceExtensions) {
@@ -521,6 +522,7 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
         abort(); /* FIXME */
     }
 
+    int8_t isDescrete = pDeviceProperties->deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     int8_t indicesComplete = pIndices && pIndices->graphicsFamilyHV && pIndices->presentFamilyHV;
     int8_t extensionsSupported = !checkDeviceExtensionsSupport(pDevice);
     int8_t swapChainAdequate = pSwapChainSupport->formatCount && pSwapChainSupport->presentModeCount;
@@ -530,7 +532,7 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     free(pDeviceProperties);
     free(pDeviceFeatures);
 
-    return indicesComplete && extensionsSupported && swapChainAdequate;
+    return indicesComplete && extensionsSupported && swapChainAdequate && isDescrete;
 }
 
 VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) {
@@ -666,10 +668,12 @@ uint32_t findMemoryType(void *_app, uint32_t typeFilter, VkMemoryPropertyFlags p
 
     for (uint32_t i = 0; i < pMemProperties->memoryTypeCount; ++i) {
         if ((typeFilter & (1 << i)) && ((pMemProperties->memoryTypes + i)->propertyFlags & properties) == properties) {
+            free(pMemProperties);
             return i;
         }
     }
 
+    free(pMemProperties);
     return UINT32_MAX;
 }
 
@@ -705,6 +709,9 @@ int updateUniformBuffer(void *_app, uint32_t currentImage) {
     vkMapMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + currentImage), 0, sizeof(struct UniformBufferObject), 0, &data);
         memcpy(data, ubo, sizeof(struct UniformBufferObject));
     vkUnmapMemory(*(pApp->pDevice), *(pApp->pUniformBuffersMemory + currentImage));
+
+    free(ubo);
+    free(now);
 
     return 0;
 }
@@ -863,6 +870,8 @@ int createDescriptorSetLayout(void *_app) {
         printf("Failed to create descriptor set layout\n");
         return 1;
     }
+
+    free(pLayoutInfo);
 
     return 0;
 }
@@ -1438,7 +1447,6 @@ int createFramebuffers(void *_app) {
     return 0;
 }
 
-/* TODO: adding frees stopped here */
 int createGraphicsPipeline(void *_app) {
     struct HelloTriangleApp *pApp = (struct HelloTriangleApp *)_app;
 
@@ -1665,14 +1673,15 @@ int createGraphicsPipeline(void *_app) {
     free(pVertexInputInfo);
     free(pInputAssembly);
     free(pViewport);
-    free(pScissor);
     free(pViewportState);
+    free(pScissor);
     free(pRasterizer);
     free(pMultisampling);
     free(pColorBlendAttachment);
     free(pColorBlending);
     free(pDynamicState);
     free(pPipelineLayoutInfo);
+    free(pPipelineInfo);
 
     free(vertShaderCode);
     free(fragShaderCode);
@@ -1803,6 +1812,8 @@ int createImageViews(void *_app) {
             printf("Failed to create image views\n");
             return 1;
         }
+
+        free(pCreateInfo);
     }
 
     return 0;
@@ -1898,6 +1909,11 @@ int createSwapChain(void *_app) {
 
     pApp->pSwapChainFormat = &(pSurfaceFormat->format);
     pApp->swapChainExtent = extent;
+
+    /* freeSwapChainSupportDetails(pSwapChainSupport); */
+    free(pSwapChainSupport);
+    free(pCreateInfo);
+    free(pIndices);
 
     return 0;
 }
@@ -2009,6 +2025,11 @@ int createLogicalDevice(void *_app) {
     vkGetDeviceQueue(*(pApp->pDevice), pIndices->graphicsFamily, 0, pApp->pGraphicsQueue);
     vkGetDeviceQueue(*(pApp->pDevice), pIndices->presentFamily, 0, pApp->pPresentQueue);
 
+    free(pQueueCreateInfos);
+    free(pDeviceFeatures);
+    free(pCreateInfo);
+    free(pIndices);
+
     return 0;
 }
 
@@ -2048,6 +2069,8 @@ int pickPhysicalDevice(void *_app) {
         printf("Failed to find a suitable GPU\n");
         return 1;
     }
+
+    /* free(devices); FIXME: free */
 
     return 0;
 }
@@ -2128,7 +2151,12 @@ int createInstance(void *_app) {
         printf("\t%s\n", (extensions + i)->extensionName);
     }
 
+    free(extensions);
+
 #endif
+
+    free(pAppInfo);
+    free(pCreateInfo);
 
     /* free(glfwExtensions); FIXME: !!!*/
 
@@ -2297,8 +2325,6 @@ int cleanup(void *_app) {
 
     glfwDestroyWindow(pApp->pWindow);
     glfwTerminate();
-
-    free(pApp->pPhysicalDevice);
 
     return 0;
 }
