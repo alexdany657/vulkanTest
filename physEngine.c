@@ -522,7 +522,7 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
         abort(); /* FIXME */
     }
 
-    int8_t isDescrete = pDeviceProperties->deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    int8_t isDiscrete = pDeviceProperties->deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     int8_t indicesComplete = pIndices && pIndices->graphicsFamilyHV && pIndices->presentFamilyHV;
     int8_t extensionsSupported = !checkDeviceExtensionsSupport(pDevice);
     int8_t swapChainAdequate = pSwapChainSupport->formatCount && pSwapChainSupport->presentModeCount;
@@ -532,7 +532,7 @@ int8_t isDeviceSuitable(void *pApp, void *_device) {
     free(pDeviceProperties);
     free(pDeviceFeatures);
 
-    return indicesComplete && extensionsSupported && swapChainAdequate && isDescrete;
+    return indicesComplete && extensionsSupported && swapChainAdequate && isDiscrete;
 }
 
 VkShaderModule *createShaderModule(void *_app, const char *code, uint64_t size) {
