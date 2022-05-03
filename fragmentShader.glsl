@@ -3,10 +3,10 @@
 
 #define SAMPLES             512
 #define ODE_SAMPLES         10
-#define LIGHT_SAMPLES       16
+#define LIGHT_SAMPLES       64
 #define EPS                 0.0001
 
-#define ALPHA               0.01
+#define ALPHA               0.2
 #define X_0                 0.0
 
 layout(binding = 0) uniform UniformBufferObject {
@@ -37,33 +37,38 @@ float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
 }
 
 float n(vec3 x) {
-    return 1.0;
-    //return ALPHA * (x.z - X_0);
+    return 1.0 + ALPHA * (x.z - X_0);
 }
 
 vec3 gradN(vec3 x) {
-    return vec3(0.0, 0.0, 0.0);
+    return vec3(0.0, 0.0, ALPHA);
 }
 
 vec3 getNextPoint(vec3 x0, vec3 dir0, float delta) {
     // TODO: rewrite without symmetry assumptions
     // first we need to rotate vector so it will be put in xz plane
-    vec2 x = vec2(0, x0.z);
-    vec2 dir = normalize(vec2(length(dir0.xy), dir0.z));
-    float xt = tan(dir.y / dir.x);
+    vec2 x = vec2(0, x0.y);
+    vec2 dir = normalize(vec2(length(dir0.xz), dir0.y));
+    float xt = dir.y / dir.x;
     // Euler
     float eps = abs(delta) / ODE_SAMPLES;
+    dir = normalize(vec2(1.0, xt));
     for (float i = 0.0; i < ODE_SAMPLES; i += 1.0) {
-        vec3 curp = vec3(x.x, 0.0, x.y);
-        vec3 norm = vec3(-dir.y, 0.0, dir.x);
-        float k = abs(dot(gradN(curp), norm)) / n(curp) * pow(1 + xt * xt, 3.0/2.0);
+        vec3 curp = vec3(x0.x + x.x*normalize(dir0.xz).x, x.y, x0.z + x.x*normalize(dir0.xz).y);
+        vec3 norm = vec3(normalize(dir0.xz).x*dir.y, -dir.x, normalize(dir0.xz).y*dir.y);
+        float k = abs(dot(gradN(curp), norm)) / n(curp) * pow(1 + xt * xt, 1.5);
+        // k = 0.0;
 
         xt += sign(delta) * eps * k;
         x += sign(delta) * eps * vec2(1.0, xt);
+        dir = normalize(vec2(1.0, xt));
     }
-    dir = normalize(vec2(1.0, atan(xt)));
-    lastDir = vec3(normalize(dir0.xy)*dir.x, dir.y);
-    return vec3(x0.xy + x.x*normalize(dir0.xy), x.y);
+    lastDir = vec3(normalize(dir0.xz).x*dir.x, dir.y, normalize(dir0.xz).y*dir.x);
+    vec3 test = vec3(x0.x + x.x*normalize(dir0.xz).x, x.y, x0.z + x.x*normalize(dir0.xz).y);
+    vec3 linear = vec3(x0.x + dir0.x * delta, x0.y + dir0.y * delta, x0.z + dir0.z * delta);
+    return vec3(test.x, test.y, test.z);
+
+    //return vec3(x0.xy + x.x*normalize(dir0.xy), x.y);
 }
 
 void main() {
