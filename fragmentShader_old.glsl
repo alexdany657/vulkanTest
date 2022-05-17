@@ -2,14 +2,12 @@
 #extension GL_ARB_separate_shader_objects : enable
 
 #define SAMPLES             512
-#define ODE_SAMPLES         20
-#define LIGHT_SAMPLES       1
+#define ODE_SAMPLES         10
+#define LIGHT_SAMPLES       64
 #define EPS                 0.0001
 
-#define ALPHA               100.0
+#define ALPHA               0.2
 #define X_0                 0.0
-#define N0                  1.0
-#define N1                  1.3
 
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
@@ -23,12 +21,10 @@ layout(location = 0) out vec4 outColor;
 vec3 lastDir = vec3(0.0, 0.0, 0.0);
 
 float sphereSDF(const in vec3 point, const in vec3 center, const in float radius) {
-    return 1.0;
     return sign(length(point - center) - radius);
 }
 
 float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
-    //return sign(point.y - center.y);
     if (abs(point.x - center.x) < side*0.5 && abs(point.y - center.y) < side*0.5 && abs(point.z - center.z) < side*0.5) {
         return -1.0;
     }
@@ -41,13 +37,11 @@ float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
 }
 
 float n(vec3 x) {
-    return (N1 + N0) / 2.0 - (N1 - N0) / 2.0 * tanh(ALPHA * (x.y - X_0));
-    return 1.0 + ALPHA * (x.y - X_0);
+    return 1.0 + ALPHA * (x.z - X_0);
 }
 
 vec3 gradN(vec3 x) {
-    return vec3(0.0, (N0 - N1) / 2.0 * ALPHA / pow(cosh((x.y - X_0)*ALPHA), 2.0), 0.0);
-    return vec3(0.0, ALPHA, 0.0);
+    return vec3(0.0, 0.0, ALPHA);
 }
 
 vec3 getNextPoint(vec3 x0, vec3 dir0, float delta) {
@@ -193,17 +187,6 @@ void main() {
                 }
 
                 vec3 color = clamp(-dot(norm, dirLight1)*light1_weight, 0.0, 1.0)*lightColor1+clamp(-dot(norm,dirLight2)*light2_weight, 0.0, 1.0)*lightColor2+color1;
-                /*
-                if (cp.y < -1.0/ALPHA) {
-                    color.b = 1.0;
-                }
-                if (-1.0/ALPHA < cp.y && cp.y < 0.0) {
-                    color.r = 1.0;
-                }
-                */
-                color.r = (radius1+cp.y) / (2.0 * radius1);
-                color.b = 1.0 - color.r;
-                color.g = 0.0;
                 outColor = vec4(color, 1.0);
                 break;
             } 
