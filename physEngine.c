@@ -29,6 +29,8 @@ const uint32_t index_count = 6;
 
 struct timespec *start;
 
+#define STEP    0.01
+
 #ifdef NDEBUG
 const int8_t enableValidationLayers = 0;
 #else
@@ -107,6 +109,10 @@ struct HelloTriangleApp {
 
     VkDescriptorPool *pDescriptorPool;
     VkDescriptorSet *pDescriptorSets;
+
+    vec3 pos;
+    float phi;
+    float theta;
 };
 
 /* declarations */
@@ -703,7 +709,12 @@ int updateUniformBuffer(void *_app, uint32_t currentImage) {
 
     glm_mat4_copy(GLM_MAT4_IDENTITY, ubo->model);
     glm_rotate(ubo->model, time * glm_rad(90.0f), (vec3){0.0f, 0.0f, 1.0f});
-    glm_lookat((vec3){2.0 * sin(time * glm_rad(90.0f)), 1.0f, 2.0 * cos(time * glm_rad(90.0f))}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 1.0f, 0.0f}, tmp);
+    //glm_lookat((vec3){2.0 * sin(time * glm_rad(90.0f)), 1.0f, 2.0 * cos(time * glm_rad(90.0f))}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 1.0f, 0.0f}, tmp);
+    //glm_lookat((vec3){0.0f, 0.1f+0.0f*sin(time), 0.0f}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){sin(time * glm_rad(0.0f)), 0.0f, cos(time * glm_rad(0.0f))}, tmp);
+    glm_lookat((vec3){pApp->pos[0] + cos(pApp->phi)*cos(pApp->theta),
+            pApp->pos[1] + sin(pApp->theta),
+            pApp->pos[2] + sin(pApp->phi)*cos(pApp->theta)}, pApp->pos,
+            (vec3){-cos(pApp->phi)*sin(pApp->theta), cos(pApp->theta), -sin(pApp->phi)*sin(pApp->theta)}, tmp);
     glm_mat4_inv(tmp, ubo->view);
     glm_perspective(glm_rad(45.0f), pApp->swapChainExtent.width / (float)pApp->swapChainExtent.height, 0.1f, 10.0f, ubo->proj);
     ubo->proj[1][1] *= -1;
@@ -2287,6 +2298,49 @@ int mainLoop(void *_app) {
     while (!glfwWindowShouldClose(pApp->pWindow)) {
         glfwPollEvents();
         drawFrame(pApp);
+
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_Q) == GLFW_PRESS) {
+            pApp->pos[1] += STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_E) == GLFW_PRESS) {
+            pApp->pos[1] -= STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_A) == GLFW_RELEASE) {
+            pApp->pos[0] -= STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_D) == GLFW_RELEASE) {
+            pApp->pos[0] += STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_W) == GLFW_RELEASE) {
+            pApp->pos[2] -= STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_S) == GLFW_RELEASE) {
+            pApp->pos[2] += STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_K) == GLFW_RELEASE) {
+            pApp->phi += STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_SEMICOLON) == GLFW_RELEASE) {
+            pApp->phi -= STEP;
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_O) == GLFW_RELEASE) {
+            pApp->theta += STEP;
+            if (pApp->theta > glm_rad(90.0f)) {
+                pApp->theta = glm_rad(90.0f);
+            }
+            if (pApp->theta < -glm_rad(90.0f)) {
+                pApp->theta = -glm_rad(90.0f);
+            }
+        }
+        if (glfwGetKey(pApp->pWindow, GLFW_KEY_L) == GLFW_RELEASE) {
+            pApp->theta -= STEP;
+            if (pApp->theta > glm_rad(90.0f)) {
+                pApp->theta = glm_rad(90.0f);
+            }
+            if (pApp->theta < -glm_rad(90.0f)) {
+                pApp->theta = -glm_rad(90.0f);
+            }
+        }
     }
 
     vkDeviceWaitIdle(*(pApp->pDevice));
@@ -2337,6 +2391,11 @@ int run(void *_app) {
 
     pApp->currentFrame = 0;
     pApp->framebufferResized = 0;
+    pApp->pos[0] = 0.0f;
+    pApp->pos[1] = 0.1f;
+    pApp->pos[2] = 0.0f;
+    pApp->phi = -glm_rad(90.0f);
+    pApp->theta = glm_rad(90.0f);
 
     if (initWindow(pApp)) {
         printf("Failed to initialize window\n");

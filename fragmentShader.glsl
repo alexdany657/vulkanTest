@@ -2,14 +2,15 @@
 #extension GL_ARB_separate_shader_objects : enable
 
 #define SAMPLES             512
-#define ODE_SAMPLES         20
-#define LIGHT_SAMPLES       1
+#define ODE_SAMPLES         16
+#define LIGHT_SAMPLES       0
 #define EPS                 0.0001
 
-#define ALPHA               100.0
+#define ALPHA               0.0
 #define X_0                 0.0
-#define N0                  1.0
-#define N1                  1.3
+#define N0                  1.3
+#define N1                  1.0
+#define OMEGA               200.0
 
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
@@ -28,7 +29,7 @@ float sphereSDF(const in vec3 point, const in vec3 center, const in float radius
 }
 
 float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
-    //return sign(point.y - center.y);
+    return sign(point.y - center.y);
     if (abs(point.x - center.x) < side*0.5 && abs(point.y - center.y) < side*0.5 && abs(point.z - center.z) < side*0.5) {
         return -1.0;
     }
@@ -41,12 +42,14 @@ float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
 }
 
 float n(vec3 x) {
-    return (N1 + N0) / 2.0 - (N1 - N0) / 2.0 * tanh(ALPHA * (x.y - X_0));
+    return -(-0.8734845419052732 - 3.256636411883414 * x.y -0.184321985029691 * x.y * x.y + 1.6442425106833825*x.y*x.y*x.y);
+    //return (N1 + N0) / 2.0 - (N1 - N0) / 2.0 * tanh(ALPHA * (x.y - X_0));
     return 1.0 + ALPHA * (x.y - X_0);
 }
 
 vec3 gradN(vec3 x) {
-    return vec3(0.0, (N0 - N1) / 2.0 * ALPHA / pow(cosh((x.y - X_0)*ALPHA), 2.0), 0.0);
+    return -vec3(0.0, -3.256636411883414 - 0.184321985029691*2.0*x.y + 3.0*1.6442425106833825*x.y*x.y, 0.0);
+    //return vec3(0.0, (N0 - N1) / 2.0 * ALPHA / pow(cosh((x.y - X_0)*ALPHA), 2.0), 0.0);
     return vec3(0.0, ALPHA, 0.0);
 }
 
@@ -201,9 +204,13 @@ void main() {
                     color.r = 1.0;
                 }
                 */
-                color.r = (radius1+cp.y) / (2.0 * radius1);
-                color.b = 1.0 - color.r;
-                color.g = 0.0;
+                //color.r = (radius1+cp.y) / (2.0 * radius1);
+                //color.b = 1.0 - color.r;
+                //color.g = 0.0;
+                
+                color = vec3(1.0) * (0.5+0.5*sign(cos(length(cp) * OMEGA) * sin(2.0*atan(cp.z / cp.x))));
+                //color = vec3(1.0) * (0.5+0.5*sign(sin(cp.x * OMEGA) * sin(cp.z * OMEGA))) / (length(cp) + 1.0);
+                
                 outColor = vec4(color, 1.0);
                 break;
             } 
@@ -255,7 +262,7 @@ void main() {
                     if (sphereTest1 != currentTest1) {
 
                         light1_weight = 0.0;
-                         break;
+                        break;
 
                      }
 
@@ -263,8 +270,8 @@ void main() {
 
                 vec3 color = clamp(-dot(norm, dirLight1)*light1_weight, 0.0, 1.0)*lightColor1+clamp(-dot(norm,dirLight2)*light2_weight, 0.0, 1.0)*lightColor2+color2;
                 outColor = vec4(color, 1.0);
-                 break;
-             }
+                break;
+            }
 
         }
 
