@@ -42,13 +42,13 @@ float cubeSDF(const in vec3 point, const in vec3 center, const in float side) {
 }
 
 float n(vec3 x) {
-    return -(-0.8734845419052732 - 3.256636411883414 * x.y -0.184321985029691 * x.y * x.y + 1.6442425106833825*x.y*x.y*x.y);
+    return (0.41280058620448995 + 0.6344084898095641 * x.y + 6.717602990285901 * x.y * x.y - 16.166943358398118*x.y*x.y*x.y + 8.854729850922496*x.y*x.y*x.y*x.y + 0.6368816233200405*x.y*x.y*x.y*x.y*x.y);
     //return (N1 + N0) / 2.0 - (N1 - N0) / 2.0 * tanh(ALPHA * (x.y - X_0));
     return 1.0 + ALPHA * (x.y - X_0);
 }
 
 vec3 gradN(vec3 x) {
-    return -vec3(0.0, -3.256636411883414 - 0.184321985029691*2.0*x.y + 3.0*1.6442425106833825*x.y*x.y, 0.0);
+    return vec3(0.0, 0.6344084898095641 + 2*6.717602990285901 * x.y - 3*16.166943358398118*x.y*x.y + 4*8.854729850922496*x.y*x.y*x.y + 5*0.6368816233200405*x.y*x.y*x.y*x.y, 0.0);
     //return vec3(0.0, (N0 - N1) / 2.0 * ALPHA / pow(cosh((x.y - X_0)*ALPHA), 2.0), 0.0);
     return vec3(0.0, ALPHA, 0.0);
 }
